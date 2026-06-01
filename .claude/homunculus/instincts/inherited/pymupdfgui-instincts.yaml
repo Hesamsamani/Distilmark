@@ -1,0 +1,279 @@
+# Instincts generated from https://github.com/Hesamsamani/pymupdfgui
+# Generated: 2026-06-01T14:50:11.313Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: pymupdfgui-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Commit Length
+
+## Action
+
+Write moderate-length commit messages (~60 characters)
+
+## Evidence
+
+- Average commit message length: 60 chars
+- Based on 1 commits
+
+---
+id: pymupdfgui-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: pymupdfgui-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: pymupdfgui-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: pymupdfgui-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: pymupdfgui-instinct-file-naming
+trigger: "When creating a new Python file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct File Naming
+
+## Action
+
+Name the file using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.files: camelCase
+
+---
+id: pymupdfgui-instinct-function-naming
+trigger: "When defining a new function"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Function Naming
+
+## Action
+
+Name the function using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.functions: camelCase
+
+---
+id: pymupdfgui-instinct-class-naming
+trigger: "When defining a new class"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Class Naming
+
+## Action
+
+Name the class using PascalCase
+
+## Evidence
+
+- Pattern in namingConventions.classes: PascalCase
+
+---
+id: pymupdfgui-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Constant Naming
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Pattern in namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: pymupdfgui-instinct-import-style
+trigger: "When importing modules within the package"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Import Style
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in importStyle: relative
+
+---
+id: pymupdfgui-instinct-export-style
+trigger: "When exporting functions or classes from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle: named
+
+---
+id: pymupdfgui-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Test Location
+
+## Action
+
+Place test files in a separate test folder
+
+## Evidence
+
+- Pattern in architecture.folderStructure.testLocation: separate
+
+---
+id: pymupdfgui-instinct-commit-format
+trigger: "When writing a commit message"
+confidence: 0.8
+domain: git
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Commit Format
+
+## Action
+
+Write a concise, freeform message without a prefix, averaging around 60 characters
+
+## Evidence
+
+- Pattern in commits.type: freeform
+- Pattern in commits.prefixes: []
+- Pattern in commits.averageLength: 60
+
+---
+id: pymupdfgui-instinct-module-organization
+trigger: "When organizing code into modules"
+confidence: 0.7
+domain: architecture
+source: repo-analysis
+source_repo: Hesamsamani/pymupdfgui
+---
+
+# Pymupdfgui Instinct Module Organization
+
+## Action
+
+Use a hybrid organization style (mix of flat and nested modules)
+
+## Evidence
+
+- Pattern in architecture.moduleOrganization: hybrid
+
