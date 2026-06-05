@@ -1,0 +1,394 @@
+# Instincts generated from https://github.com/Hesamsamani/Distilmark
+# Generated: 2026-06-05T00:20:43.906Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: Distilmark-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Commit Length
+
+## Action
+
+Write moderate-length commit messages (~66 characters)
+
+## Evidence
+
+- Average commit message length: 66 chars
+- Based on 2 commits
+
+---
+id: Distilmark-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: Distilmark-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: Distilmark-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: Distilmark-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: Distilmark-workflow-update-branding-and-app-icons
+trigger: "when doing update branding and app icons"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Workflow Update Branding And App Icons
+
+## Action
+
+Follow the update-branding-and-app-icons workflow:
+1. Create or update icon.png and icon.ico with new branding assets.
+2. Update sidebar or header layout in styles and app code to use the new branding.
+3. Ensure the app and bundled executables load the updated icons (including fallback logic).
+4. Update release workflow to bundle the new icons with the executable.
+5. Refresh screenshots in the README or docs to reflect the new branding.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: icon.png, icon.ico, distilmark/app.py
+
+---
+id: Distilmark-workflow-release-workflow-icon-bundling
+trigger: "when doing release workflow icon bundling"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Workflow Release Workflow Icon Bundling
+
+## Action
+
+Follow the release-workflow-icon-bundling workflow:
+1. Run a script to generate icon.ico from icon.png with all required sizes.
+2. Update the release workflow to run the icon build script before packaging.
+3. Bundle the new icon assets into the executable using PyInstaller --add-data.
+4. Verify that the bundled app displays the correct icons in the window and taskbar.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: scripts/build_icon.py, .github/workflows/release.yml, icon.png
+
+---
+id: Distilmark-workflow-refresh-readme-and-screenshots-after-ui-change
+trigger: "when doing refresh readme and screenshots after ui change"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/Hesamsamani/Distilmark
+---
+
+# Distilmark Workflow Refresh Readme And Screenshots After Ui Change
+
+## Action
+
+Follow the refresh-readme-and-screenshots-after-ui-change workflow:
+1. Take new screenshots of the updated UI.
+2. Replace outdated screenshot files in the screenshots/ directory.
+3. Update README.md to reference the new screenshots.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: screenshots/convert-dark.png, screenshots/convert-light.png, screenshots/courses-dark.png
+
+---
+id: distilmark-instinct-file-naming-camelCase
+trigger: "When creating a new Python file in the codebase"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct File Naming CamelCase
+
+## Action
+
+Name the file using camelCase (e.g., myModule.py)
+
+## Evidence
+
+- Pattern in namingConventions.files: camelCase
+
+---
+id: distilmark-instinct-function-naming-camelCase
+trigger: "When defining a new function"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Function Naming CamelCase
+
+## Action
+
+Name the function using camelCase (e.g., processInput)
+
+## Evidence
+
+- Pattern in namingConventions.functions: camelCase
+
+---
+id: distilmark-instinct-class-naming-pascalCase
+trigger: "When defining a new class"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Class Naming PascalCase
+
+## Action
+
+Name the class using PascalCase (e.g., MainWindow)
+
+## Evidence
+
+- Pattern in namingConventions.classes: PascalCase
+
+---
+id: distilmark-instinct-constant-naming-screamingSnakeCase
+trigger: "When defining a constant"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Constant Naming ScreamingSnakeCase
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE (e.g., DEFAULT_PATH)
+
+## Evidence
+
+- Pattern in namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: distilmark-instinct-import-style-relative
+trigger: "When importing modules within the package"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Import Style Relative
+
+## Action
+
+Use relative imports (e.g., from .module import X)
+
+## Evidence
+
+- Pattern in importStyle: relative
+
+---
+id: distilmark-instinct-export-style-named
+trigger: "When exporting functions or classes from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Export Style Named
+
+## Action
+
+Use named exports (explicitly specify what is exported)
+
+## Evidence
+
+- Pattern in exportStyle: named
+
+---
+id: distilmark-instinct-test-location-separate
+trigger: "When adding new tests"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Test Location Separate
+
+## Action
+
+Place test files in a separate directory from source code
+
+## Evidence
+
+- Pattern in architecture.testLocation: separate
+
+---
+id: distilmark-instinct-git-commit-freeform
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Git Commit Freeform
+
+## Action
+
+Write a concise, freeform message without a strict prefix, summarizing the change (average length ~66 characters)
+
+## Evidence
+
+- Pattern in commits.type: freeform
+- commits.averageLength: 66
+
+---
+id: distilmark-instinct-update-branding
+trigger: "When updating the app's branding, logo, or icons"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Update Branding
+
+## Action
+
+Update icon files, app layout, release workflow, and screenshots to reflect new branding
+
+## Evidence
+
+- Workflow: update-branding-and-app-icons
+- Commits: New funnel-droplet brand icon + bigger clickable sidebar logo
+
+---
+id: distilmark-instinct-release-bundle-icons
+trigger: "When releasing a new version with updated icons or branding"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Release Bundle Icons
+
+## Action
+
+Run icon build script, update release workflow, bundle icons with executable, and verify icon display
+
+## Evidence
+
+- Workflow: release-workflow-icon-bundling
+- Commits: Run a script to generate icon.ico from icon.png with all required sizes.
+
+---
+id: distilmark-instinct-refresh-readme-screenshots
+trigger: "When the UI layout, branding, or visual appearance changes"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: Hesamsamani/Distilmark
+---
+
+# Distilmark Instinct Refresh Readme Screenshots
+
+## Action
+
+Take new screenshots, replace outdated screenshot files, and update README.md to reference them
+
+## Evidence
+
+- Workflow: refresh-readme-and-screenshots-after-ui-change
+- Commits: Take new screenshots of the updated UI.
+
