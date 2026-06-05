@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QUrl
 from PyQt6.QtCore import (
     QPropertyAnimation, QEasingCurve, QTimer, pyqtProperty, QPointF,
 )
-from PyQt6.QtGui import QIcon, QFont, QAction, QPixmap, QPainter, QColor
+from PyQt6.QtGui import QIcon, QFont, QPixmap, QPainter, QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -33,7 +33,6 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QStatusBar,
     QMessageBox,
-    QSizePolicy,
     QScrollArea,
     QSplitter,
     QSpinBox,
@@ -2368,7 +2367,6 @@ class PreviewPage(QWidget):
     def start_stream(self, pdf_path: str):
         """Initialise the Preview tab with an empty Rendered area ready to
         receive live LLM stream chunks for the file ``pdf_path``."""
-        from PyQt6.QtCore import Qt as _Qt
         self._pdf_path = pdf_path
         try:
             import pymupdf
