@@ -15,7 +15,11 @@ import base64
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
+import datetime as _dt
+import hashlib
+import hmac
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -943,6 +947,142 @@ def convert_anthropic(
 
 
 # ---------------------------------------------------------------------------
+# AWS Bedrock (native — talks to bedrock-runtime directly, no boto3)
+# ---------------------------------------------------------------------------
+#
+# Uses the Bedrock *Converse* API, whose request/response shape is identical
+# across model families (Claude, Nova, Llama-vision, …) so a single code path
+# covers every vision model the user might pick. Authentication is AWS
+# Signature Version 4, implemented here with the standard library (hmac +
+# hashlib) so Distilmark stays dependency-free — no boto3 required.
+
+_BEDROCK_SERVICE = "bedrock"
+
+
+def _sigv4_sign(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _sigv4_signing_key(secret: str, date_stamp: str, region: str, service: str) -> bytes:
+    k_date = _sigv4_sign(("AWS4" + secret).encode("utf-8"), date_stamp)
+    k_region = _sigv4_sign(k_date, region)
+    k_service = _sigv4_sign(k_region, service)
+    return _sigv4_sign(k_service, "aws4_request")
+
+
+def _bedrock_invoke(
+    region: str,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    model: str,
+    body: bytes,
+    timeout: int = 600,
+) -> dict:
+    """POST a Converse request to bedrock-runtime, SigV4-signed. Returns parsed JSON."""
+    host = f"bedrock-runtime.{region}.amazonaws.com"
+    canonical_uri = "/model/" + urllib.parse.quote(model, safe="") + "/converse"
+    endpoint = f"https://{host}{canonical_uri}"
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(body).hexdigest()
+
+    canonical_headers = (
+        "content-type:application/json\n"
+        f"host:{host}\n"
+        f"x-amz-date:{amz_date}\n"
+    )
+    signed_headers = "content-type;host;x-amz-date"
+    if session_token:
+        canonical_headers += f"x-amz-security-token:{session_token}\n"
+        signed_headers += ";x-amz-security-token"
+
+    canonical_request = (
+        "POST\n" + canonical_uri + "\n" + "\n"
+        + canonical_headers + "\n" + signed_headers + "\n" + payload_hash
+    )
+
+    algorithm = "AWS4-HMAC-SHA256"
+    credential_scope = f"{date_stamp}/{region}/{_BEDROCK_SERVICE}/aws4_request"
+    string_to_sign = (
+        algorithm + "\n" + amz_date + "\n" + credential_scope + "\n"
+        + hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    )
+    signing_key = _sigv4_signing_key(secret_key, date_stamp, region, _BEDROCK_SERVICE)
+    signature = hmac.new(
+        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    authorization = (
+        f"{algorithm} Credential={access_key}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Amz-Date": amz_date,
+        "Authorization": authorization,
+    }
+    if session_token:
+        headers["X-Amz-Security-Token"] = session_token
+
+    req = urllib.request.Request(endpoint, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:500]
+        raise RuntimeError(
+            f"AWS Bedrock returned HTTP {e.code}: {detail or e.reason}"
+        ) from None
+
+
+def convert_bedrock(
+    pdf_path: Path,
+    region: str,
+    access_key: str,
+    secret_key: str,
+    model: str,
+    opts: ConvertOptions,
+    progress: ProgressCb | None = None,
+    session_token: str = "",
+) -> str:
+    prompt = _resolve_prompt(opts)
+    if not (region and access_key and secret_key and model):
+        raise RuntimeError(
+            "AWS Bedrock needs Region, Access key, Secret key and a Model id. "
+            "Fill them in under Settings → AWS Bedrock."
+        )
+
+    def page_fn(idx: int, img_b64: str) -> str:
+        payload = {
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"image": {"format": "png", "source": {"bytes": img_b64}}},
+                    {"text": prompt},
+                ],
+            }],
+            "inferenceConfig": {"maxTokens": 4096},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        data = _bedrock_invoke(
+            region, access_key, secret_key, session_token, model, body
+        )
+        parts = data.get("output", {}).get("message", {}).get("content", [])
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not text:
+            snippet = json.dumps(data)[:500]
+            raise RuntimeError(f"Bedrock returned no text. Response: {snippet}")
+        return text
+
+    # Bedrock streaming uses the binary event-stream protocol; not supported here.
+    return _run_llm(pdf_path, opts, progress, f"bedrock:{model}", page_fn)
+
+
+# ---------------------------------------------------------------------------
 # Cost estimation (rough — for hosted LLM engines only)
 # ---------------------------------------------------------------------------
 
@@ -955,6 +1095,14 @@ LLM_PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku": (0.0008, 0.004),
     "claude-sonnet": (0.003, 0.015),
     "claude-opus": (0.015, 0.075),
+    # Bedrock model ids embed the family name differently (e.g.
+    # anthropic.claude-3-5-sonnet-…, amazon.nova-pro-…) — match on the family.
+    "haiku": (0.0008, 0.004),
+    "sonnet": (0.003, 0.015),
+    "opus": (0.015, 0.075),
+    "nova-micro": (0.000035, 0.00014),
+    "nova-lite": (0.00006, 0.00024),
+    "nova-pro": (0.0008, 0.0032),
 }
 
 # rough vision tokens consumed by one rendered page image, plus typical output

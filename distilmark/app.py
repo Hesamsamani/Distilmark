@@ -187,6 +187,13 @@ class ConvertWorker(QThread):
                     self.pdf, self.cfg["compat_base_url"],
                     self.cfg["compat_api_key"], self.cfg["compat_model"], opts, cb,
                 )
+            elif engine == "bedrock":
+                md = converters.convert_bedrock(
+                    self.pdf, self.cfg["bedrock_region"],
+                    self.cfg["bedrock_access_key"], self.cfg["bedrock_secret_key"],
+                    self.cfg["bedrock_model"], opts, cb,
+                    session_token=self.cfg.get("bedrock_session_token", ""),
+                )
             elif engine == "compare":
                 def _prog_native(c, t, m):
                     self.progress.emit(c, t * 2, f"[native] {m}")
@@ -618,6 +625,7 @@ class ConvertPage(QWidget):
         self.engine_combo.addItem("OpenAI", "openai")
         self.engine_combo.addItem("Anthropic Claude", "anthropic")
         self.engine_combo.addItem("OpenAI-compatible — Groq · OpenRouter · LM Studio", "openai_compatible")
+        self.engine_combo.addItem("AWS Bedrock — Claude · Nova on your AWS account", "bedrock")
         self.engine_combo.setToolTip(
             "Choose the back-end that turns your PDF into Markdown.\n"
             "Offline engines run locally and are free; hosted engines call an API."
@@ -1226,6 +1234,7 @@ class ConvertPage(QWidget):
             "openai": self.cfg.get("openai_model", ""),
             "anthropic": self.cfg.get("anthropic_model", ""),
             "openai_compatible": self.cfg.get("compat_model", ""),
+            "bedrock": self.cfg.get("bedrock_model", ""),
         }.get(engine, "")
         cost = converters.estimate_cost(engine, model, total_pages)
         if cost is None:
@@ -1572,6 +1581,36 @@ class SettingsPage(QWidget):
         cf.addRow("Model:", self.compat_model)
         layout.addWidget(cm)
 
+        # ---- AWS Bedrock (native, no boto3) ----
+        bd = QGroupBox("AWS Bedrock  ·  Claude · Nova on your own AWS account")
+        bf = QFormLayout(bd)
+        self.bedrock_key = QLineEdit(self.cfg["bedrock_access_key"])
+        self.bedrock_secret = QLineEdit(self.cfg["bedrock_secret_key"])
+        self.bedrock_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.bedrock_token = QLineEdit(self.cfg.get("bedrock_session_token", ""))
+        self.bedrock_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.bedrock_region = QLineEdit(self.cfg["bedrock_region"])
+        self.bedrock_model = QLineEdit(self.cfg["bedrock_model"])
+        self.bedrock_model.setToolTip(
+            "Bedrock model id, e.g.\n"
+            "  anthropic.claude-3-5-sonnet-20240620-v1:0\n"
+            "  us.anthropic.claude-3-5-sonnet-20241022-v2:0  (inference profile)\n"
+            "  amazon.nova-pro-v1:0\n"
+            "Must be a vision-capable model and enabled in your Bedrock console."
+        )
+        bf.addRow("Access key ID:", self.bedrock_key)
+        bf.addRow("Secret access key:", self.bedrock_secret)
+        bf.addRow("Session token:", self.bedrock_token)
+        bf.addRow("Region:", self.bedrock_region)
+        bf.addRow("Model id:", self.bedrock_model)
+        bd_hint = QLabel(
+            "Uses your AWS credentials directly (SigV4) — no proxy, no boto3. "
+            "Session token is optional (only for temporary/STS credentials)."
+        )
+        bd_hint.setWordWrap(True); bd_hint.setObjectName("Hint")
+        bf.addRow("", bd_hint)
+        layout.addWidget(bd)
+
         # ---- LLM prompt (shared by all LLM engines) ----
         pm = QGroupBox("LLM conversion prompt")
         pf = QVBoxLayout(pm)
@@ -1847,6 +1886,11 @@ class SettingsPage(QWidget):
         self.cfg["compat_api_key"] = self.compat_key.text().strip()
         self.cfg["compat_base_url"] = self.compat_base.text().strip()
         self.cfg["compat_model"] = self.compat_model.text().strip()
+        self.cfg["bedrock_access_key"] = self.bedrock_key.text().strip()
+        self.cfg["bedrock_secret_key"] = self.bedrock_secret.text().strip()
+        self.cfg["bedrock_session_token"] = self.bedrock_token.text().strip()
+        self.cfg["bedrock_region"] = self.bedrock_region.text().strip()
+        self.cfg["bedrock_model"] = self.bedrock_model.text().strip()
         self.cfg["custom_prompt"] = self.prompt_edit.toPlainText().strip()
         self.cfg["watch_folder"] = self.watch_path.text().strip()
         self.cfg["watch_auto_convert"] = self.watch_auto_cb.isChecked()
