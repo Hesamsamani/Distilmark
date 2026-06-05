@@ -9,9 +9,9 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Set up Python 3.14
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: "3.14"
     - name: Install dependencies
@@ -20,5 +20,9 @@ jobs:
         pip install pylint setuptools
         pip install -r requirements.txt
     - name: Analysing the code with pylint
+      # `pyi_splash` is injected by PyInstaller at runtime inside a --splash
+      # bundle; it is never pip-installable, so the linter can never resolve
+      # it. Ignore that one module so import-error still guards every real
+      # dependency without failing the build on a known build-time-only import.
       run: |
-        pylint --unsafe-load-any-extension=y --disable=all --enable=import-error --enable=cyclic-import $(git ls-files '*.py')
+        pylint --unsafe-load-any-extension=y --disable=all --enable=import-error --enable=cyclic-import --ignored-modules=pyi_splash $(git ls-files '*.py')
