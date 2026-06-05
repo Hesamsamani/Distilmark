@@ -147,8 +147,9 @@ class ConvertWorker(QThread):
             # (e.g. .docx) we transparently pre-convert to PDF using Pandoc.
             src = self.pdf
             self.pdf = _maybe_preconvert_to_pdf(self.pdf)
-            import pymupdf as _mupdf
-            _doc = _mupdf.open(self.pdf)
+            # Validated open: encrypted / corrupt PDFs raise a friendly PdfError
+            # here (caught below) instead of a raw PyMuPDF traceback.
+            _doc = converters._open_pdf(self.pdf)
             page_count = _doc.page_count
             _doc.close()
 
@@ -209,6 +210,10 @@ class ConvertWorker(QThread):
             self.finished_ok.emit(md, str(self.pdf), page_count)
         except converters.CancelledError:
             self.cancelled.emit(str(self.pdf))
+        except converters.ConversionError as e:
+            # User-facing problem (bad PDF, backend error) — show the clean
+            # message, not a Python traceback.
+            self.failed.emit(str(self.pdf), str(e))
         except Exception:
             self.failed.emit(str(self.pdf), traceback.format_exc())
 

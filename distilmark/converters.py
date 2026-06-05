@@ -35,6 +35,43 @@ class CancelledError(Exception):
     """Raised cooperatively when the user cancels a running conversion."""
 
 
+class ConversionError(Exception):
+    """A user-facing conversion problem whose message is safe to show as-is.
+
+    The GUI shows ``str(err)`` for these directly (no traceback), so the text
+    must be a clear, human-readable explanation rather than a stack dump.
+    """
+
+
+class PdfError(ConversionError):
+    """The input PDF cannot be read (password-protected, corrupt, or not a PDF)."""
+
+
+def _open_pdf(pdf_path) -> "pymupdf.Document":
+    """Open a PDF for reading, translating the two common failure modes into a
+    friendly :class:`PdfError` instead of leaking raw PyMuPDF exceptions (which
+    otherwise reach the UI as a Python traceback).
+
+    Callers own the returned document and must close it.
+    """
+    name = Path(pdf_path).name
+    try:
+        doc = pymupdf.open(pdf_path)
+    except pymupdf.FileDataError as e:
+        raise PdfError(
+            f"'{name}' is not a valid PDF, or the file is corrupted."
+        ) from e
+    except Exception as e:  # unreadable path, permissions, unknown format, …
+        raise PdfError(f"Could not open '{name}': {e}") from e
+    if doc.needs_pass:
+        doc.close()
+        raise PdfError(
+            f"'{name}' is password-protected. "
+            "Remove the password (or unlock the PDF) and try again."
+        )
+    return doc
+
+
 @dataclass
 class ConvertOptions:
     include_images: bool = True
@@ -327,7 +364,7 @@ def convert_native(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
-    doc = pymupdf.open(pdf_path)
+    doc = _open_pdf(pdf_path)
     total = doc.page_count
     indices = _page_indices(total, opts.page_range)
     pages: list[str] = []
@@ -477,7 +514,7 @@ def convert_pdfplumber(
     try:
         import pdfplumber  # type: ignore
     except ImportError as e:
-        raise RuntimeError(
+        raise ConversionError(
             "pdfplumber is not installed. Run: pip install pdfplumber"
         ) from e
 
@@ -485,6 +522,9 @@ def convert_pdfplumber(
     # user can still override anything they want.
     table_settings = {**_DEFAULT_PDFPLUMBER_TABLE_SETTINGS, **(opts.plumber_table_settings or {})}
     pages_md: list[str] = []
+    # Validate via PyMuPDF first so encrypted / corrupt PDFs raise a friendly
+    # PdfError instead of a raw pdfminer exception.
+    _open_pdf(pdf_path).close()
     with pdfplumber.open(str(pdf_path)) as doc:
         total = len(doc.pages)
         indices = _page_indices(total, opts.page_range)
@@ -650,7 +690,7 @@ def _run_llm(
     label: str,
     page_fn: PageFn,
 ) -> str:
-    doc = pymupdf.open(pdf_path)
+    doc = _open_pdf(pdf_path)
     total = doc.page_count
     indices = _page_indices(total, opts.page_range)
     # Render all needed pages up front — PyMuPDF docs are not thread-safe, so
@@ -759,16 +799,16 @@ def _extract_openai_content(data: dict) -> str:
     and accept the most common non-OpenAI shapes instead.
     """
     if not isinstance(data, dict):
-        raise RuntimeError(f"Unexpected response from backend: {data!r}")
+        raise ConversionError(f"Unexpected response from backend: {data!r}")
 
     # 1) Explicit error object -> show the backend's own message.
     err = data.get("error")
     if err:
         msg = err.get("message") if isinstance(err, dict) else err
-        raise RuntimeError(f"Backend returned an error: {msg}")
+        raise ConversionError(f"Backend returned an error: {msg}")
     if "message" in data and "choices" not in data and isinstance(data.get("message"), str):
         # Some gateways return a bare {"message": "...", "code": ...} on auth/quota errors.
-        raise RuntimeError(f"Backend returned an error: {data['message']}")
+        raise ConversionError(f"Backend returned an error: {data['message']}")
 
     # 2) Standard OpenAI chat-completions shape.
     choices = data.get("choices")
@@ -800,7 +840,7 @@ def _extract_openai_content(data: dict) -> str:
 
     # Nothing matched — show a trimmed body so the user can see what came back.
     snippet = json.dumps(data)[:500]
-    raise RuntimeError(
+    raise ConversionError(
         "Could not find generated text in the backend response. "
         f"Is this really an OpenAI-compatible endpoint? Response was: {snippet}"
     )
@@ -846,7 +886,7 @@ def convert_openai_compatible(
                 # Auth/quota/model errors arrive as 4xx/5xx with the real
                 # message in the body — read it instead of a bare HTTP code.
                 detail = e.read().decode("utf-8", "ignore")[:500]
-                raise RuntimeError(
+                raise ConversionError(
                     f"Backend returned HTTP {e.code}: {detail or e.reason}"
                 ) from None
             return _extract_openai_content(data)
@@ -1034,7 +1074,7 @@ def _bedrock_invoke(
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:500]
-        raise RuntimeError(
+        raise ConversionError(
             f"AWS Bedrock returned HTTP {e.code}: {detail or e.reason}"
         ) from None
 
@@ -1051,7 +1091,7 @@ def convert_bedrock(
 ) -> str:
     prompt = _resolve_prompt(opts)
     if not (region and access_key and secret_key and model):
-        raise RuntimeError(
+        raise ConversionError(
             "AWS Bedrock needs Region, Access key, Secret key and a Model id. "
             "Fill them in under Settings → AWS Bedrock."
         )
@@ -1075,7 +1115,7 @@ def convert_bedrock(
         text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
         if not text:
             snippet = json.dumps(data)[:500]
-            raise RuntimeError(f"Bedrock returned no text. Response: {snippet}")
+            raise ConversionError(f"Bedrock returned no text. Response: {snippet}")
         return text
 
     # Bedrock streaming uses the binary event-stream protocol; not supported here.
