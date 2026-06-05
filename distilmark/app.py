@@ -2040,6 +2040,31 @@ class SettingsPage(QWidget):
         last = err.strip().splitlines()[-1] if err.strip() else "Unknown error"
         self.pull_status.setText(f"✗ {last}")
 
+    def refresh_from_cfg(self):
+        """Push current cfg values back into the widgets (reverse of ``_save``).
+        Called after the setup wizard programmatically changes settings so the
+        Engine/Settings tab reflects them immediately instead of showing the
+        stale values captured when the page was first built."""
+        self.ollama_url.setText(self.cfg.get("ollama_url", ""))
+        self.ollama_model.setText(self.cfg.get("ollama_model", ""))
+        self.custom_scan_path.setText(self.cfg.get("ollama_extra_scan_path", ""))
+        self.openai_key.setText(self.cfg.get("openai_api_key", ""))
+        self.openai_model.setText(self.cfg.get("openai_model", ""))
+        self.openai_base.setText(self.cfg.get("openai_base_url", ""))
+        self.an_key.setText(self.cfg.get("anthropic_api_key", ""))
+        self.an_model.setText(self.cfg.get("anthropic_model", ""))
+        self.compat_key.setText(self.cfg.get("compat_api_key", ""))
+        self.compat_base.setText(self.cfg.get("compat_base_url", ""))
+        self.compat_model.setText(self.cfg.get("compat_model", ""))
+        self.bedrock_key.setText(self.cfg.get("bedrock_access_key", ""))
+        self.bedrock_secret.setText(self.cfg.get("bedrock_secret_key", ""))
+        self.bedrock_token.setText(self.cfg.get("bedrock_session_token", ""))
+        self.bedrock_region.setText(self.cfg.get("bedrock_region", ""))
+        self.bedrock_model.setText(self.cfg.get("bedrock_model", ""))
+        self.prompt_edit.setPlainText(self.cfg.get("custom_prompt", ""))
+        self.watch_path.setText(self.cfg.get("watch_folder", ""))
+        self.watch_auto_cb.setChecked(self.cfg.get("watch_auto_convert", False))
+
     def _save(self):
         self.cfg["ollama_url"] = self.ollama_url.text().strip()
         self.cfg["ollama_model"] = self.ollama_model.text().strip()
@@ -3675,8 +3700,10 @@ class MainWindow(QMainWindow):
     def _open_new_project_wizard(self, first_run: bool = False):
         wiz = NewProjectWizard(self.cfg, self)
         if wiz.exec():
-            # cfg was updated + saved by the wizard; reflect it on the Convert page.
+            # cfg was updated + saved by the wizard; reflect it on the Convert
+            # page AND the Engine/Settings tab (where credentials are edited).
             self.convert_page.apply_cfg()
+            self.settings_page.refresh_from_cfg()
             goto = _WIZARD_USECASE_GOTO.get(wiz.use_case, "convert")
             if not wiz.take_me_there:
                 self.statusBar().showMessage("Setup saved. ✅", 4000)
