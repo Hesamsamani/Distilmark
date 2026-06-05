@@ -15,7 +15,7 @@
 </p>
 
 <p>
-  🌙 <b>Dark & Light themes</b> · 🔌 <b>7 engines</b> · 📚 <b>Courses</b> · 👀 <b>Editable preview</b> · 📤 <b>HTML / DOCX export</b> · 🔭 <b>Watch folder</b> · 🦙 <b>Offline ready</b>
+  🌙 <b>Dark & Light themes</b> · 🔌 <b>8 engines</b> · 📚 <b>Courses</b> · 👀 <b>Editable preview</b> · 📤 <b>HTML / DOCX export</b> · 🔭 <b>Watch folder</b> · 🦙 <b>Offline ready</b>
 </p>
 
 </div>
@@ -86,12 +86,13 @@ Pick whichever vibe matches you:
 | **OpenAI** | 🤖 | ❌ | Highest fidelity, easy setup | `gpt-4o-mini` and friends. |
 | **Anthropic** | 🧠 | ❌ | Great structure on dense PDFs | Claude Haiku/Sonnet/Opus with vision. |
 | **OpenAI-compatible** | 🌐 | 🤷 | Groq · OpenRouter · LM Studio · vLLM · anything custom | Plug in any `/chat/completions` endpoint. |
+| **AWS Bedrock** | ☁️ | ❌ | Claude · Nova on your own AWS account | Native SigV4 (no boto3, no proxy). Uses the Bedrock *Converse* API, so any vision model works. |
 
 ---
 
 ## ✨ Features
 
-- 🎯 **Multiple engines** — seven backends, one UI, switch in a single click
+- 🎯 **Multiple engines** — eight backends, one UI, switch in a single click
 - 📚 **Courses & chapters** — organise PDFs into courses with chapters and a library view showing which files are *added* vs *converted*. Built for exam prep when you've got dozens of per-chapter PDFs; convert all pending docs in one click and double-click any converted file to open it in Preview.
 - 👀 **Live preview, editable** — source PDF page beside the rendered Markdown, with a Source/Edit tab to tweak the output and Save back to disk. Compare mode adds Native / pdfplumber / **Diff** tabs side-by-side.
 - 📤 **Export anywhere** — one click for **HTML**, **DOCX** (Pandoc when available, python-docx fallback), or **combined `.md`** when batching a folder.

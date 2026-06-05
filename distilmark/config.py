@@ -54,6 +54,12 @@ DEFAULTS: dict[str, Any] = {
     "compat_api_key": "",
     "compat_base_url": "",
     "compat_model": "",
+    # AWS Bedrock (native, SigV4 — no boto3)
+    "bedrock_access_key": "",
+    "bedrock_secret_key": "",
+    "bedrock_session_token": "",
+    "bedrock_region": "us-east-1",
+    "bedrock_model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
     "theme": "dark",
     "include_images": True,
     "page_separator": True,
@@ -86,6 +92,8 @@ DEFAULTS: dict[str, Any] = {
     # watch a folder for new PDFs and auto-add them
     "watch_folder": "",
     "watch_auto_convert": False,
+    # first-run setup wizard (shown once until completed/skipped)
+    "wizard_completed": False,
 }
 
 

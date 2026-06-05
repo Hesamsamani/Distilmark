@@ -7,7 +7,10 @@ import traceback
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QUrl
-from PyQt6.QtGui import QIcon, QFont, QAction, QPixmap, QPainter, QColor
+from PyQt6.QtCore import (
+    QPropertyAnimation, QEasingCurve, QTimer, pyqtProperty, QPointF,
+)
+from PyQt6.QtGui import QIcon, QFont, QPixmap, QPainter, QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -30,7 +33,6 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QStatusBar,
     QMessageBox,
-    QSizePolicy,
     QScrollArea,
     QSplitter,
     QSpinBox,
@@ -41,6 +43,10 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QHeaderView,
     QDialog,
+    QWizard,
+    QWizardPage,
+    QRadioButton,
+    QButtonGroup,
 )
 
 from . import config, converters, styles, ollama_manager, exporters, projects
@@ -147,8 +153,9 @@ class ConvertWorker(QThread):
             # (e.g. .docx) we transparently pre-convert to PDF using Pandoc.
             src = self.pdf
             self.pdf = _maybe_preconvert_to_pdf(self.pdf)
-            import pymupdf as _mupdf
-            _doc = _mupdf.open(self.pdf)
+            # Validated open: encrypted / corrupt PDFs raise a friendly PdfError
+            # here (caught below) instead of a raw PyMuPDF traceback.
+            _doc = converters._open_pdf(self.pdf)
             page_count = _doc.page_count
             _doc.close()
 
@@ -187,6 +194,13 @@ class ConvertWorker(QThread):
                     self.pdf, self.cfg["compat_base_url"],
                     self.cfg["compat_api_key"], self.cfg["compat_model"], opts, cb,
                 )
+            elif engine == "bedrock":
+                md = converters.convert_bedrock(
+                    self.pdf, self.cfg["bedrock_region"],
+                    self.cfg["bedrock_access_key"], self.cfg["bedrock_secret_key"],
+                    self.cfg["bedrock_model"], opts, cb,
+                    session_token=self.cfg.get("bedrock_session_token", ""),
+                )
             elif engine == "compare":
                 def _prog_native(c, t, m):
                     self.progress.emit(c, t * 2, f"[native] {m}")
@@ -202,6 +216,10 @@ class ConvertWorker(QThread):
             self.finished_ok.emit(md, str(self.pdf), page_count)
         except converters.CancelledError:
             self.cancelled.emit(str(self.pdf))
+        except converters.ConversionError as e:
+            # User-facing problem (bad PDF, backend error) — show the clean
+            # message, not a Python traceback.
+            self.failed.emit(str(self.pdf), str(e))
         except Exception:
             self.failed.emit(str(self.pdf), traceback.format_exc())
 
@@ -301,6 +319,138 @@ def _brand_pixmap(size: int) -> QPixmap:
                              Qt.AspectRatioMode.KeepAspectRatio,
                              Qt.TransformationMode.SmoothTransformation)
     return _brand_mark(size)
+
+
+class _SplashScreen(QWidget):
+    """Frameless, borderless launch splash with three beats:
+    fade-in → gentle "breathing" of the brand mark → fade-out.
+
+    Pure-Qt, so it behaves identically from source and inside the PyInstaller
+    .exe. There is no window frame and no coloured border — just the logo
+    breathing on a dark PyDracula card while the main window builds.
+    """
+
+    _W, _H = 440, 300
+
+    def __init__(self):
+        super().__init__(
+            None,
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.SplashScreen
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._logo = _brand_pixmap(132)
+        self._pulse = 0.0  # 0..1, drives the breathing scale + glow
+        self.resize(self._W, self._H)
+        scr = QApplication.primaryScreen()
+        if scr:
+            self.move(scr.geometry().center() - self.rect().center())
+        self.setWindowOpacity(0.0)
+
+        # Breathing: 0 → 1 → 0, looped forever, smoothly (sine in/out).
+        self._breath = QPropertyAnimation(self, b"pulse", self)
+        self._breath.setDuration(2200)
+        self._breath.setStartValue(0.0)
+        self._breath.setKeyValueAt(0.5, 1.0)
+        self._breath.setEndValue(0.0)
+        self._breath.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._breath.setLoopCount(-1)
+        self._fade = None  # keep a ref so the active fade isn't garbage-collected
+
+    # ---- "pulse" animatable property ----
+    def _get_pulse(self) -> float:
+        return self._pulse
+
+    def _set_pulse(self, v: float) -> None:
+        self._pulse = v
+        self.update()
+
+    pulse = pyqtProperty(float, fget=_get_pulse, fset=_set_pulse)
+
+    # ---- lifecycle ----
+    def fade_in(self, ms: int = 480) -> None:
+        a = QPropertyAnimation(self, b"windowOpacity", self)
+        a.setDuration(ms)
+        a.setStartValue(0.0)
+        a.setEndValue(1.0)
+        a.setEasingCurve(QEasingCurve.Type.OutCubic)
+        a.finished.connect(self._breath.start)  # breathe once fully visible
+        a.start()
+        self._fade = a
+
+    def fade_out(self, on_done) -> None:
+        self._breath.stop()
+        a = QPropertyAnimation(self, b"windowOpacity", self)
+        a.setDuration(420)
+        a.setStartValue(self.windowOpacity())
+        a.setEndValue(0.0)
+        a.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        def _finish():
+            self.close()
+            on_done()
+
+        a.finished.connect(_finish)
+        a.start()
+        self._fade = a
+
+    # ---- paint ----
+    def paintEvent(self, _evt) -> None:
+        from PyQt6.QtGui import QLinearGradient
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        rect = QRectF(0, 0, self._W, self._H)
+
+        # Dark rounded card (PyDracula), no border.
+        grad = QLinearGradient(0, 0, 0, self._H)
+        grad.setColorAt(0.0, QColor("#282C34"))
+        grad.setColorAt(1.0, QColor("#21252B"))
+        p.setBrush(grad)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(rect, 22, 22)
+
+        e = self._pulse
+        cx = self._W / 2
+        logo_cy = self._H * 0.40
+
+        # Soft accent glow that swells with the breath.
+        glow = QColor("#BD93F9")  # PyDracula purple
+        glow.setAlphaF(0.08 + 0.18 * e)
+        p.setBrush(glow)
+        radius = max(self._logo.width(), self._logo.height()) * (0.62 + 0.06 * e)
+        p.drawEllipse(QPointF(cx, logo_cy), radius, radius)
+
+        # Logo, gently scaling 0.93 → 1.0 with the breath.
+        scale = 0.93 + 0.07 * e
+        lw = self._logo.width() * scale
+        lh = self._logo.height() * scale
+        p.drawPixmap(
+            QRectF(cx - lw / 2, logo_cy - lh / 2, lw, lh),
+            self._logo,
+            QRectF(self._logo.rect()),
+        )
+
+        # Wordmark + subtitle.
+        p.setPen(QColor("#F8F8F2"))
+        wf = QFont()
+        wf.setPointSize(24)
+        wf.setBold(True)
+        p.setFont(wf)
+        p.drawText(
+            QRectF(0, self._H * 0.63, self._W, 40),
+            Qt.AlignmentFlag.AlignHCenter, "Distilmark",
+        )
+        p.setPen(QColor("#6272A4"))
+        sf = QFont()
+        sf.setPointSize(10)
+        p.setFont(sf)
+        p.drawText(
+            QRectF(0, self._H * 0.63 + 42, self._W, 24),
+            Qt.AlignmentFlag.AlignHCenter, "PDF → Markdown",
+        )
+        p.end()
 
 
 class _BrandButton(QPushButton):
@@ -618,6 +768,7 @@ class ConvertPage(QWidget):
         self.engine_combo.addItem("OpenAI", "openai")
         self.engine_combo.addItem("Anthropic Claude", "anthropic")
         self.engine_combo.addItem("OpenAI-compatible — Groq · OpenRouter · LM Studio", "openai_compatible")
+        self.engine_combo.addItem("AWS Bedrock — Claude · Nova on your AWS account", "bedrock")
         self.engine_combo.setToolTip(
             "Choose the back-end that turns your PDF into Markdown.\n"
             "Offline engines run locally and are free; hosted engines call an API."
@@ -1215,6 +1366,29 @@ class ConvertPage(QWidget):
         self.cfg["auto_open_output"] = self.auto_open_cb.isChecked()
         config.save(self.cfg)
 
+    def apply_cfg(self):
+        """Push cfg values into the widgets (reverse of _sync_cfg). Called after
+        the setup wizard changes settings programmatically so the Convert page
+        reflects them immediately."""
+        eng = self.cfg.get("engine", "native")
+        for i in range(self.engine_combo.count()):
+            if self.engine_combo.itemData(i) == eng:
+                self.engine_combo.setCurrentIndex(i)
+                break
+        self.images_cb.setChecked(self.cfg.get("include_images", True))
+        self.sep_cb.setChecked(self.cfg.get("page_separator", True))
+        self.range_from.setText(str(self.cfg.get("page_range_from", "")))
+        self.range_to.setText(str(self.cfg.get("page_range_to", "")))
+        self.ocr_cb.setChecked(self.cfg.get("ocr_enabled", False))
+        self.ocr_lang.setText(self.cfg.get("ocr_language", "eng"))
+        self.pp_hyphen_cb.setChecked(self.cfg.get("pp_merge_hyphens", False))
+        self.pp_blanks_cb.setChecked(self.cfg.get("pp_collapse_blanks", False))
+        self.pp_hf_cb.setChecked(self.cfg.get("pp_strip_headers_footers", False))
+        self.tables_cb.setChecked(self.cfg.get("plumber_tables_enabled", True))
+        self.math_cb.setChecked(self.cfg.get("math_mode", False))
+        self.stream_cb_w.setChecked(self.cfg.get("stream_output", False))
+        self.auto_open_cb.setChecked(self.cfg.get("auto_open_output", False))
+
     def _estimate_cost(self):
         if not self.queue:
             self.status.showMessage("Add files first to estimate cost.", 4000)
@@ -1226,6 +1400,7 @@ class ConvertPage(QWidget):
             "openai": self.cfg.get("openai_model", ""),
             "anthropic": self.cfg.get("anthropic_model", ""),
             "openai_compatible": self.cfg.get("compat_model", ""),
+            "bedrock": self.cfg.get("bedrock_model", ""),
         }.get(engine, "")
         cost = converters.estimate_cost(engine, model, total_pages)
         if cost is None:
@@ -1572,6 +1747,36 @@ class SettingsPage(QWidget):
         cf.addRow("Model:", self.compat_model)
         layout.addWidget(cm)
 
+        # ---- AWS Bedrock (native, no boto3) ----
+        bd = QGroupBox("AWS Bedrock  ·  Claude · Nova on your own AWS account")
+        bf = QFormLayout(bd)
+        self.bedrock_key = QLineEdit(self.cfg["bedrock_access_key"])
+        self.bedrock_secret = QLineEdit(self.cfg["bedrock_secret_key"])
+        self.bedrock_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.bedrock_token = QLineEdit(self.cfg.get("bedrock_session_token", ""))
+        self.bedrock_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.bedrock_region = QLineEdit(self.cfg["bedrock_region"])
+        self.bedrock_model = QLineEdit(self.cfg["bedrock_model"])
+        self.bedrock_model.setToolTip(
+            "Bedrock model id, e.g.\n"
+            "  anthropic.claude-3-5-sonnet-20240620-v1:0\n"
+            "  us.anthropic.claude-3-5-sonnet-20241022-v2:0  (inference profile)\n"
+            "  amazon.nova-pro-v1:0\n"
+            "Must be a vision-capable model and enabled in your Bedrock console."
+        )
+        bf.addRow("Access key ID:", self.bedrock_key)
+        bf.addRow("Secret access key:", self.bedrock_secret)
+        bf.addRow("Session token:", self.bedrock_token)
+        bf.addRow("Region:", self.bedrock_region)
+        bf.addRow("Model id:", self.bedrock_model)
+        bd_hint = QLabel(
+            "Uses your AWS credentials directly (SigV4) — no proxy, no boto3. "
+            "Session token is optional (only for temporary/STS credentials)."
+        )
+        bd_hint.setWordWrap(True); bd_hint.setObjectName("Hint")
+        bf.addRow("", bd_hint)
+        layout.addWidget(bd)
+
         # ---- LLM prompt (shared by all LLM engines) ----
         pm = QGroupBox("LLM conversion prompt")
         pf = QVBoxLayout(pm)
@@ -1847,6 +2052,11 @@ class SettingsPage(QWidget):
         self.cfg["compat_api_key"] = self.compat_key.text().strip()
         self.cfg["compat_base_url"] = self.compat_base.text().strip()
         self.cfg["compat_model"] = self.compat_model.text().strip()
+        self.cfg["bedrock_access_key"] = self.bedrock_key.text().strip()
+        self.cfg["bedrock_secret_key"] = self.bedrock_secret.text().strip()
+        self.cfg["bedrock_session_token"] = self.bedrock_token.text().strip()
+        self.cfg["bedrock_region"] = self.bedrock_region.text().strip()
+        self.cfg["bedrock_model"] = self.bedrock_model.text().strip()
         self.cfg["custom_prompt"] = self.prompt_edit.toPlainText().strip()
         self.cfg["watch_folder"] = self.watch_path.text().strip()
         self.cfg["watch_auto_convert"] = self.watch_auto_cb.isChecked()
@@ -2157,7 +2367,6 @@ class PreviewPage(QWidget):
     def start_stream(self, pdf_path: str):
         """Initialise the Preview tab with an empty Rendered area ready to
         receive live LLM stream chunks for the file ``pdf_path``."""
-        from PyQt6.QtCore import Qt as _Qt
         self._pdf_path = pdf_path
         try:
             import pymupdf
@@ -3063,6 +3272,245 @@ class AboutPage(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# New-project setup wizard
+# ---------------------------------------------------------------------------
+
+# (id, title, description) — the four guided goals.
+_WIZARD_USE_CASES = [
+    ("study", "🎓  Exam / study prep",
+     "Organise per-chapter PDFs into a Course and convert them all at once — "
+     "ready for summaries, flashcards and concept graphs."),
+    ("convert", "📄  Convert a document or folder",
+     "Turn a single PDF — or a whole folder — into clean Markdown."),
+    ("tables", "📐  Tables and data",
+     "Spreadsheet-like PDFs: pull tables out as GitHub-flavoured Markdown "
+     "with layout-aware parsing."),
+    ("research", "🔬  Research papers",
+     "Academic PDFs with equations: math-mode Markdown via an AI engine "
+     "for the cleanest structure."),
+]
+
+# (engine id, label) — the engines the wizard can pre-select.
+_WIZARD_ENGINES = [
+    ("native", "Native — fully offline, fast & private"),
+    ("pdfplumber", "pdfplumber — offline, best for tables"),
+    ("ollama", "Ollama — local AI model (offline)"),
+    ("openai", "OpenAI — hosted AI (needs API key)"),
+    ("anthropic", "Anthropic Claude — hosted AI (needs API key)"),
+    ("bedrock", "AWS Bedrock — Claude/Nova on your AWS account"),
+    ("openai_compatible", "OpenAI-compatible — Groq / OpenRouter / LM Studio…"),
+]
+
+# Per-engine credential fields: (label, cfg_key, is_password).
+_WIZARD_ENGINE_FIELDS = {
+    "native": [],
+    "pdfplumber": [],
+    "ollama": [("Server URL", "ollama_url", False),
+               ("Model", "ollama_model", False)],
+    "openai": [("API key", "openai_api_key", True),
+               ("Model", "openai_model", False)],
+    "anthropic": [("API key", "anthropic_api_key", True),
+                  ("Model", "anthropic_model", False)],
+    "bedrock": [("Region", "bedrock_region", False),
+                ("Access key ID", "bedrock_access_key", False),
+                ("Secret access key", "bedrock_secret_key", True),
+                ("Model id", "bedrock_model", False)],
+    "openai_compatible": [("Base URL", "compat_base_url", False),
+                          ("API key", "compat_api_key", True),
+                          ("Model", "compat_model", False)],
+}
+
+# Options each goal pre-enables (merged into cfg on Finish).
+_WIZARD_USECASE_OPTS = {
+    "study":    {"include_images": True, "page_separator": True,
+                 "pp_strip_headers_footers": True, "math_mode": False},
+    "convert":  {"include_images": True, "page_separator": True},
+    "tables":   {"include_images": True, "page_separator": True,
+                 "plumber_tables_enabled": True},
+    "research": {"include_images": True, "page_separator": True,
+                 "math_mode": True},
+}
+
+# Page each goal lands on after finishing.
+_WIZARD_USECASE_GOTO = {
+    "study": "courses", "convert": "convert",
+    "tables": "convert", "research": "convert",
+}
+
+
+class _WizUseCasePage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("What do you want to do?")
+        self.setSubTitle("Pick a goal — I'll set up the right engine and options.")
+        v = QVBoxLayout(self)
+        self._group = QButtonGroup(self)
+        self._by_id: dict[int, str] = {}
+        for i, (uid, title, desc) in enumerate(_WIZARD_USE_CASES):
+            rb = QRadioButton(title)
+            f = rb.font(); f.setBold(True); rb.setFont(f)
+            v.addWidget(rb)
+            hint = QLabel(desc)
+            hint.setWordWrap(True)
+            hint.setObjectName("Hint")
+            hint.setContentsMargins(28, 0, 0, 10)
+            v.addWidget(hint)
+            self._group.addButton(rb, i)
+            self._by_id[i] = uid
+            if uid == "convert":
+                rb.setChecked(True)
+        v.addStretch()
+
+    def validatePage(self):
+        self.wizard().use_case = self._by_id.get(self._group.checkedId(), "convert")
+        return True
+
+
+class _WizEnginePage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("Choose your engine")
+        self.setSubTitle(
+            "Offline engines are free and private. Hosted AI engines need a key."
+        )
+        v = QVBoxLayout(self)
+        self.combo = QComboBox()
+        for eng, label in _WIZARD_ENGINES:
+            self.combo.addItem(label, eng)
+        v.addWidget(self.combo)
+        self.stack = QStackedWidget()
+        v.addWidget(self.stack)
+        self._fields: dict[str, dict[str, QLineEdit]] = {}
+        self._index: dict[str, int] = {}
+        for eng, _label in _WIZARD_ENGINES:
+            w = QWidget()
+            form = QFormLayout(w)
+            specs = _WIZARD_ENGINE_FIELDS[eng]
+            if not specs:
+                form.addRow(QLabel("Runs fully offline — nothing to configure. ✅"))
+            fields: dict[str, QLineEdit] = {}
+            for label, key, pw in specs:
+                le = QLineEdit()
+                if pw:
+                    le.setEchoMode(QLineEdit.EchoMode.Password)
+                form.addRow(label + ":", le)
+                fields[key] = le
+            self._index[eng] = self.stack.addWidget(w)
+            self._fields[eng] = fields
+        self.combo.currentIndexChanged.connect(self._sync_stack)
+        v.addStretch()
+
+    def _sync_stack(self):
+        eng = self.combo.currentData()
+        self.stack.setCurrentIndex(self._index.get(eng, 0))
+
+    def _select(self, eng: str):
+        for i in range(self.combo.count()):
+            if self.combo.itemData(i) == eng:
+                self.combo.setCurrentIndex(i)
+                break
+        self._sync_stack()
+
+    def initializePage(self):
+        cfg = self.wizard().cfg
+        # Fill every engine's fields from cfg.
+        for eng, fields in self._fields.items():
+            for key, le in fields.items():
+                le.setText(str(cfg.get(key, "")))
+        # Default engine from the goal, then the user can override.
+        uc = self.wizard().use_case
+        if uc == "tables":
+            default = "pdfplumber"
+        elif uc == "research":
+            if cfg.get("openai_api_key"):
+                default = "openai"
+            elif cfg.get("anthropic_api_key"):
+                default = "anthropic"
+            else:
+                default = "native"
+        else:
+            default = cfg.get("engine", "native")
+        self._select(default)
+
+    def validatePage(self):
+        cfg = self.wizard().cfg
+        eng = self.combo.currentData()
+        cfg["engine"] = eng
+        for key, le in self._fields.get(eng, {}).items():
+            cfg[key] = le.text().strip()
+        return True
+
+
+class _WizFinishPage(QWizardPage):
+    def __init__(self):
+        super().__init__()
+        self.setTitle("All set!")
+        v = QVBoxLayout(self)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        v.addWidget(self.summary)
+        self.take_me = QCheckBox("Take me there now")
+        self.take_me.setChecked(True)
+        v.addWidget(self.take_me)
+        v.addStretch()
+
+    def initializePage(self):
+        wiz = self.wizard()
+        title = next((t for u, t, _ in _WIZARD_USE_CASES if u == wiz.use_case),
+                     wiz.use_case)
+        eng_label = next((l for e, l in _WIZARD_ENGINES if e == wiz.cfg.get("engine")),
+                         wiz.cfg.get("engine", "native"))
+        self.summary.setText(
+            f"<p><b>Goal:</b> {title}</p>"
+            f"<p><b>Engine:</b> {eng_label}</p>"
+            "<p>Click <b>Finish</b> — Distilmark will apply these settings and "
+            "open the right place for you.</p>"
+        )
+
+
+class NewProjectWizard(QWizard):
+    """First-run / on-demand setup wizard. Collects a goal + engine, writes the
+    matching settings into ``cfg``, and exposes ``use_case`` / ``take_me_there``
+    so MainWindow can navigate to the right page afterwards."""
+
+    def __init__(self, cfg: dict, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.use_case = "convert"
+        self.take_me_there = True
+        self.setWindowTitle("Distilmark — New project")
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.setMinimumSize(660, 520)
+        self.setOption(QWizard.WizardOption.NoBackButtonOnStartPage, True)
+
+        intro = QWizardPage()
+        intro.setTitle("Welcome to Distilmark")
+        intro.setSubTitle("Turn PDFs into clean, usable Markdown.")
+        iv = QVBoxLayout(intro)
+        blurb = QLabel(
+            "This quick setup picks the best engine and options for what you're "
+            "doing. You can change everything later in the Engines tab, or rerun "
+            "this from the <b>✨ New Project</b> button."
+        )
+        blurb.setWordWrap(True)
+        iv.addWidget(blurb)
+        iv.addStretch()
+        self.addPage(intro)
+        self.addPage(_WizUseCasePage())
+        self.addPage(_WizEnginePage())
+        self._finish = _WizFinishPage()
+        self.addPage(self._finish)
+
+    def accept(self):
+        # Merge the goal's recommended options, mark the wizard done, persist.
+        self.cfg.update(_WIZARD_USECASE_OPTS.get(self.use_case, {}))
+        self.cfg["wizard_completed"] = True
+        self.take_me_there = self._finish.take_me.isChecked()
+        config.save(self.cfg)
+        super().accept()
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 
@@ -3108,6 +3556,15 @@ class MainWindow(QMainWindow):
         # Big clickable brand block (logo + wordmark + tagline) — opens the repo.
         self.brand_btn = _BrandButton(self.cfg)
         sb.addWidget(self.brand_btn)
+        sb.addSpacing(10)
+
+        # Prominent CTA: relaunch the guided setup wizard anytime.
+        self.new_project_btn = QPushButton("  ✨  New Project")
+        self.new_project_btn.setObjectName("Primary")
+        self.new_project_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_project_btn.setToolTip("Guided setup: pick a goal and engine")
+        self.new_project_btn.clicked.connect(lambda: self._open_new_project_wizard())
+        sb.addWidget(self.new_project_btn)
         # Spacer pushes the NAVIGATION section down to breathe under the logo.
         sb.addSpacing(14)
 
@@ -3202,6 +3659,39 @@ class MainWindow(QMainWindow):
         for i, b in enumerate(self.nav_buttons):
             b.setChecked(i == idx)
 
+    # ---- setup wizard ----
+    def showEvent(self, event):
+        """Offer the setup wizard on the very first launch (once the window is
+        actually visible — i.e. after the splash has revealed it)."""
+        super().showEvent(event)
+        if getattr(self, "_first_run_checked", False):
+            return
+        self._first_run_checked = True
+        if not self.cfg.get("wizard_completed", False):
+            QTimer.singleShot(
+                300, lambda: self._open_new_project_wizard(first_run=True)
+            )
+
+    def _open_new_project_wizard(self, first_run: bool = False):
+        wiz = NewProjectWizard(self.cfg, self)
+        if wiz.exec():
+            # cfg was updated + saved by the wizard; reflect it on the Convert page.
+            self.convert_page.apply_cfg()
+            goto = _WIZARD_USECASE_GOTO.get(wiz.use_case, "convert")
+            if not wiz.take_me_there:
+                self.statusBar().showMessage("Setup saved. ✅", 4000)
+                return
+            if goto == "courses":
+                self._switch(1)
+                self.courses_page._new_course()
+            else:
+                self._switch(0)
+                self.convert_page.pick_files()
+        elif first_run:
+            # Cancelled the first-run wizard — don't nag on every launch.
+            self.cfg["wizard_completed"] = True
+            config.save(self.cfg)
+
     # ---- collapsible sidebar ----
     def _sidebar_icon_color(self) -> str:
         # PyDracula icon tone (light grey on dark surface, slate on paper).
@@ -3222,6 +3712,7 @@ class MainWindow(QMainWindow):
         self.sidebar.setFixedWidth(56 if collapsed else 238)
         # Hide the text-heavy bits when collapsed; show compact icon rail instead.
         self.brand_btn.setVisible(not collapsed)
+        self.new_project_btn.setVisible(not collapsed)
         self.nav_section.setVisible(not collapsed)
         self.theme_section.setVisible(not collapsed)
         self.theme_wrap.setVisible(not collapsed)
@@ -3329,7 +3820,26 @@ def main() -> None:
     app.setApplicationName("Distilmark")
     icon = QIcon(_brand_pixmap(256))
     app.setWindowIcon(icon)
-    w = MainWindow(cfg)
-    w.setWindowIcon(icon)
-    w.show()
+
+    # Animated launch splash: fade-in → breathing → fade-out. The main window
+    # is built after the fade-in plays, then revealed once it's ready (with a
+    # minimum on-screen time so the breathing is actually seen).
+    splash = _SplashScreen()
+    splash.show()
+    splash.fade_in()
+
+    holder: dict = {}
+
+    def _reveal():
+        w = holder["w"]
+        splash.fade_out(w.show)
+
+    def _build():
+        w = MainWindow(cfg)
+        w.setWindowIcon(icon)
+        holder["w"] = w
+        QTimer.singleShot(1100, _reveal)  # let it breathe before revealing
+
+    QTimer.singleShot(520, _build)  # build after the fade-in has played
+
     sys.exit(app.exec())

@@ -15,7 +15,11 @@ import base64
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
+import datetime as _dt
+import hashlib
+import hmac
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +33,43 @@ ProgressCb = Callable[[int, int, str], None]  # (current_page, total_pages, mess
 
 class CancelledError(Exception):
     """Raised cooperatively when the user cancels a running conversion."""
+
+
+class ConversionError(Exception):
+    """A user-facing conversion problem whose message is safe to show as-is.
+
+    The GUI shows ``str(err)`` for these directly (no traceback), so the text
+    must be a clear, human-readable explanation rather than a stack dump.
+    """
+
+
+class PdfError(ConversionError):
+    """The input PDF cannot be read (password-protected, corrupt, or not a PDF)."""
+
+
+def _open_pdf(pdf_path) -> "pymupdf.Document":
+    """Open a PDF for reading, translating the two common failure modes into a
+    friendly :class:`PdfError` instead of leaking raw PyMuPDF exceptions (which
+    otherwise reach the UI as a Python traceback).
+
+    Callers own the returned document and must close it.
+    """
+    name = Path(pdf_path).name
+    try:
+        doc = pymupdf.open(pdf_path)
+    except pymupdf.FileDataError as e:
+        raise PdfError(
+            f"'{name}' is not a valid PDF, or the file is corrupted."
+        ) from e
+    except Exception as e:  # unreadable path, permissions, unknown format, …
+        raise PdfError(f"Could not open '{name}': {e}") from e
+    if doc.needs_pass:
+        doc.close()
+        raise PdfError(
+            f"'{name}' is password-protected. "
+            "Remove the password (or unlock the PDF) and try again."
+        )
+    return doc
 
 
 @dataclass
@@ -323,7 +364,7 @@ def convert_native(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
-    doc = pymupdf.open(pdf_path)
+    doc = _open_pdf(pdf_path)
     total = doc.page_count
     indices = _page_indices(total, opts.page_range)
     pages: list[str] = []
@@ -473,7 +514,7 @@ def convert_pdfplumber(
     try:
         import pdfplumber  # type: ignore
     except ImportError as e:
-        raise RuntimeError(
+        raise ConversionError(
             "pdfplumber is not installed. Run: pip install pdfplumber"
         ) from e
 
@@ -481,6 +522,9 @@ def convert_pdfplumber(
     # user can still override anything they want.
     table_settings = {**_DEFAULT_PDFPLUMBER_TABLE_SETTINGS, **(opts.plumber_table_settings or {})}
     pages_md: list[str] = []
+    # Validate via PyMuPDF first so encrypted / corrupt PDFs raise a friendly
+    # PdfError instead of a raw pdfminer exception.
+    _open_pdf(pdf_path).close()
     with pdfplumber.open(str(pdf_path)) as doc:
         total = len(doc.pages)
         indices = _page_indices(total, opts.page_range)
@@ -646,7 +690,7 @@ def _run_llm(
     label: str,
     page_fn: PageFn,
 ) -> str:
-    doc = pymupdf.open(pdf_path)
+    doc = _open_pdf(pdf_path)
     total = doc.page_count
     indices = _page_indices(total, opts.page_range)
     # Render all needed pages up front — PyMuPDF docs are not thread-safe, so
@@ -755,16 +799,16 @@ def _extract_openai_content(data: dict) -> str:
     and accept the most common non-OpenAI shapes instead.
     """
     if not isinstance(data, dict):
-        raise RuntimeError(f"Unexpected response from backend: {data!r}")
+        raise ConversionError(f"Unexpected response from backend: {data!r}")
 
     # 1) Explicit error object -> show the backend's own message.
     err = data.get("error")
     if err:
         msg = err.get("message") if isinstance(err, dict) else err
-        raise RuntimeError(f"Backend returned an error: {msg}")
+        raise ConversionError(f"Backend returned an error: {msg}")
     if "message" in data and "choices" not in data and isinstance(data.get("message"), str):
         # Some gateways return a bare {"message": "...", "code": ...} on auth/quota errors.
-        raise RuntimeError(f"Backend returned an error: {data['message']}")
+        raise ConversionError(f"Backend returned an error: {data['message']}")
 
     # 2) Standard OpenAI chat-completions shape.
     choices = data.get("choices")
@@ -796,7 +840,7 @@ def _extract_openai_content(data: dict) -> str:
 
     # Nothing matched — show a trimmed body so the user can see what came back.
     snippet = json.dumps(data)[:500]
-    raise RuntimeError(
+    raise ConversionError(
         "Could not find generated text in the backend response. "
         f"Is this really an OpenAI-compatible endpoint? Response was: {snippet}"
     )
@@ -842,7 +886,7 @@ def convert_openai_compatible(
                 # Auth/quota/model errors arrive as 4xx/5xx with the real
                 # message in the body — read it instead of a bare HTTP code.
                 detail = e.read().decode("utf-8", "ignore")[:500]
-                raise RuntimeError(
+                raise ConversionError(
                     f"Backend returned HTTP {e.code}: {detail or e.reason}"
                 ) from None
             return _extract_openai_content(data)
@@ -943,6 +987,142 @@ def convert_anthropic(
 
 
 # ---------------------------------------------------------------------------
+# AWS Bedrock (native — talks to bedrock-runtime directly, no boto3)
+# ---------------------------------------------------------------------------
+#
+# Uses the Bedrock *Converse* API, whose request/response shape is identical
+# across model families (Claude, Nova, Llama-vision, …) so a single code path
+# covers every vision model the user might pick. Authentication is AWS
+# Signature Version 4, implemented here with the standard library (hmac +
+# hashlib) so Distilmark stays dependency-free — no boto3 required.
+
+_BEDROCK_SERVICE = "bedrock"
+
+
+def _sigv4_sign(key: bytes, msg: str) -> bytes:
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+
+def _sigv4_signing_key(secret: str, date_stamp: str, region: str, service: str) -> bytes:
+    k_date = _sigv4_sign(("AWS4" + secret).encode("utf-8"), date_stamp)
+    k_region = _sigv4_sign(k_date, region)
+    k_service = _sigv4_sign(k_region, service)
+    return _sigv4_sign(k_service, "aws4_request")
+
+
+def _bedrock_invoke(
+    region: str,
+    access_key: str,
+    secret_key: str,
+    session_token: str,
+    model: str,
+    body: bytes,
+    timeout: int = 600,
+) -> dict:
+    """POST a Converse request to bedrock-runtime, SigV4-signed. Returns parsed JSON."""
+    host = f"bedrock-runtime.{region}.amazonaws.com"
+    canonical_uri = "/model/" + urllib.parse.quote(model, safe="") + "/converse"
+    endpoint = f"https://{host}{canonical_uri}"
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(body).hexdigest()
+
+    canonical_headers = (
+        "content-type:application/json\n"
+        f"host:{host}\n"
+        f"x-amz-date:{amz_date}\n"
+    )
+    signed_headers = "content-type;host;x-amz-date"
+    if session_token:
+        canonical_headers += f"x-amz-security-token:{session_token}\n"
+        signed_headers += ";x-amz-security-token"
+
+    canonical_request = (
+        "POST\n" + canonical_uri + "\n" + "\n"
+        + canonical_headers + "\n" + signed_headers + "\n" + payload_hash
+    )
+
+    algorithm = "AWS4-HMAC-SHA256"
+    credential_scope = f"{date_stamp}/{region}/{_BEDROCK_SERVICE}/aws4_request"
+    string_to_sign = (
+        algorithm + "\n" + amz_date + "\n" + credential_scope + "\n"
+        + hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+    )
+    signing_key = _sigv4_signing_key(secret_key, date_stamp, region, _BEDROCK_SERVICE)
+    signature = hmac.new(
+        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    authorization = (
+        f"{algorithm} Credential={access_key}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-Amz-Date": amz_date,
+        "Authorization": authorization,
+    }
+    if session_token:
+        headers["X-Amz-Security-Token"] = session_token
+
+    req = urllib.request.Request(endpoint, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:500]
+        raise ConversionError(
+            f"AWS Bedrock returned HTTP {e.code}: {detail or e.reason}"
+        ) from None
+
+
+def convert_bedrock(
+    pdf_path: Path,
+    region: str,
+    access_key: str,
+    secret_key: str,
+    model: str,
+    opts: ConvertOptions,
+    progress: ProgressCb | None = None,
+    session_token: str = "",
+) -> str:
+    prompt = _resolve_prompt(opts)
+    if not (region and access_key and secret_key and model):
+        raise ConversionError(
+            "AWS Bedrock needs Region, Access key, Secret key and a Model id. "
+            "Fill them in under Settings → AWS Bedrock."
+        )
+
+    def page_fn(idx: int, img_b64: str) -> str:
+        payload = {
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"image": {"format": "png", "source": {"bytes": img_b64}}},
+                    {"text": prompt},
+                ],
+            }],
+            "inferenceConfig": {"maxTokens": 4096},
+        }
+        body = json.dumps(payload).encode("utf-8")
+        data = _bedrock_invoke(
+            region, access_key, secret_key, session_token, model, body
+        )
+        parts = data.get("output", {}).get("message", {}).get("content", [])
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not text:
+            snippet = json.dumps(data)[:500]
+            raise ConversionError(f"Bedrock returned no text. Response: {snippet}")
+        return text
+
+    # Bedrock streaming uses the binary event-stream protocol; not supported here.
+    return _run_llm(pdf_path, opts, progress, f"bedrock:{model}", page_fn)
+
+
+# ---------------------------------------------------------------------------
 # Cost estimation (rough — for hosted LLM engines only)
 # ---------------------------------------------------------------------------
 
@@ -955,6 +1135,14 @@ LLM_PRICES: dict[str, tuple[float, float]] = {
     "claude-haiku": (0.0008, 0.004),
     "claude-sonnet": (0.003, 0.015),
     "claude-opus": (0.015, 0.075),
+    # Bedrock model ids embed the family name differently (e.g.
+    # anthropic.claude-3-5-sonnet-…, amazon.nova-pro-…) — match on the family.
+    "haiku": (0.0008, 0.004),
+    "sonnet": (0.003, 0.015),
+    "opus": (0.015, 0.075),
+    "nova-micro": (0.000035, 0.00014),
+    "nova-lite": (0.00006, 0.00024),
+    "nova-pro": (0.0008, 0.0032),
 }
 
 # rough vision tokens consumed by one rendered page image, plus typical output
