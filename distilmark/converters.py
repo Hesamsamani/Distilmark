@@ -646,6 +646,23 @@ PROMPT = (
     "Do not add commentary. Output only the markdown."
 )
 
+# Instruction injected (per-page) for vision LLM engines when precise images
+# were extracted. This is the key to accurate image *positioning* that matches
+# the original PDF layout, instead of dumping full-page screenshots.
+IMAGE_ASSET_INSTRUCTION = (
+    "\n\n### Precise figure / image assets extracted from this page\n"
+    "The PDF page you are looking at contains the following embedded images/figures that have been "
+    "precisely extracted (not full page renders). Their relative markdown links are listed below.\n\n"
+    "RULES FOR IMAGES (critical for layout fidelity):\n"
+    "- Place each image markdown **inline in the output at the exact narrative position** where the visual appears on the page "
+    "  (immediately after the sentence, paragraph or heading that refers to it, following the natural reading order you observe).\n"
+    "- Use the **exact path** provided in the links below. Do not change or omit the (./...png) portion.\n"
+    "- You MAY improve the alt text inside [] to be short, descriptive and URL-safe (use - or _ instead of spaces, e.g. system-architecture-diagram).\n"
+    "- Do not put all images at the top or bottom. Embed them where they belong visually so the rendered Markdown looks like the original page.\n"
+    "- If a visual element on the page has no asset listed, describe it in text.\n\n"
+    "Available image markdowns for this page (embed the matching ones at correct positions):\n"
+)
+
 MATH_PROMPT_ADDITION = (
     " Preserve mathematical formulas: wrap inline math with single dollar signs "
     "($x = a + b$) and display equations with double dollar signs ($$...$$). "
@@ -680,7 +697,7 @@ def is_likely_scanned(pdf_path: Path, sample_pages: int = 3, threshold: int = 50
 # Generic LLM page runner (sequential or concurrent)
 # ---------------------------------------------------------------------------
 
-PageFn = Callable[[int, str], str]  # (page_idx_0based, image_b64) -> markdown
+PageFn = Callable[[int, str, list[str]], str]  # (page_idx_0based, image_b64, image_markdown_refs_for_page) -> markdown
 
 
 def _run_llm(
@@ -699,20 +716,29 @@ def _run_llm(
     for i in indices:
         _check_cancel(opts)
         images[i] = _render_page_png_b64(doc[i])
-    doc.close()
 
-    # For LLM/vision engines (Ollama, OpenAI, Bedrock, etc.) we still want a folder
-    # with images when include_images is on. We save the exact page renders that
-    # were sent to the vision model. This makes the output .md contain working
-    # image links (like native/pdfplumber modes) and creates the images/ folder
-    # the user expects.
+    # For LLM/vision engines we render the full page **only** to send to the VLM
+    # (so it can understand complex diagrams, layout, and reading order).
+    # When include_images is on we:
+    #   * Create the images/ sibling folder (matching native behavior)
+    #   * Extract + save only the *precise individual embedded images* (pageNNN_imgM.png)
+    #     using the same _extract_images path as the native/pdfplumber engines.
+    #   * Do NOT save or reference full-page screenshots in the output .md
+    #     (user explicitly does not want "the whole page image").
+    #   * Pass the list of exact image markdown refs to the per-page call so the
+    #     vision model can embed them at the visually correct positions inside the
+    #     generated markdown (this is what gives layout/position fidelity close to
+    #     the original PDF and to the native engine).
+    extracted_per_page: dict[int, list[str]] = {}
     if opts.include_images and opts.image_dir is not None:
         opts.image_dir.mkdir(parents=True, exist_ok=True)
         for page_idx in indices:
-            b64 = images[page_idx]
-            data = base64.b64decode(b64)
-            fname = f"page{page_idx + 1:03d}.png"
-            (opts.image_dir / fname).write_bytes(data)
+            page = doc[page_idx]
+            extracted_list: list[str] = []
+            _extract_images(doc, page, opts.image_dir, opts.image_dir_name, extracted_list)
+            extracted_per_page[page_idx] = extracted_list
+
+    doc.close()
 
     n_total = len(indices)
     results: dict[int, str] = {}
@@ -723,12 +749,13 @@ def _run_llm(
             _check_cancel(opts)
             if progress:
                 progress(n + 1, n_total, f"Page {i+1}/{total} ({label})")
-            results[i] = page_fn(i, images[i])
+            refs = extracted_per_page.get(i, [])
+            results[i] = page_fn(i, images[i], refs)
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         done = 0
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
-            futs = {ex.submit(page_fn, i, images[i]): i for i in indices}
+            futs = {ex.submit(page_fn, i, images[i], extracted_per_page.get(i, [])): i for i in indices}
             try:
                 for fut in as_completed(futs):
                     _check_cancel(opts)
@@ -743,21 +770,11 @@ def _run_llm(
 
     pages = [results[i] for i in indices]
 
-    # Guarantee that each page section in the final markdown has a reference to
-    # its visual (the full page render we sent to the LLM). This ensures images
-    # appear in the .md and in the Preview even if the LLM transcription itself
-    # does not emit image links.
-    if opts.include_images and opts.image_dir is not None:
-        wrapped_pages = []
-        for n, i in enumerate(indices):
-            text = pages[n]
-            fname = f"page{i + 1:03d}.png"
-            if opts.image_dir_name:
-                ref = f"./{opts.image_dir_name}/{fname}"
-            else:
-                ref = fname
-            wrapped_pages.append(f"![Page {i + 1}]({ref})\n\n{text}")
-        pages = wrapped_pages
+    # No more auto-wrapping with full page images or forced append of individuals.
+    # The model (when given the precise refs + strong placement rules) is responsible
+    # for putting ![...](correct/path) at the right spots in the text flow.
+    # This + using the same structural extraction as native gives the position
+    # accuracy the user requires.
 
     pages = postprocess(pages, opts)
     return _assemble(pages, opts)
@@ -774,12 +791,15 @@ def convert_ollama(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
-    prompt = _resolve_prompt(opts)
+    base_prompt = _resolve_prompt(opts)
     streaming = opts.stream_cb is not None
 
-    def page_fn(idx: int, img_b64: str) -> str:
+    def page_fn(idx: int, img_b64: str, image_refs: list[str]) -> str:
+        p = base_prompt
+        if image_refs:
+            p = base_prompt + IMAGE_ASSET_INSTRUCTION + "\n".join(image_refs) + "\n"
         payload = {
-            "model": model, "prompt": prompt,
+            "model": model, "prompt": p,
             "images": [img_b64], "stream": streaming,
         }
         body = json.dumps(payload).encode("utf-8")
@@ -884,16 +904,19 @@ def convert_openai_compatible(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
-    prompt = _resolve_prompt(opts)
+    base_prompt = _resolve_prompt(opts)
     streaming = opts.stream_cb is not None
 
-    def page_fn(idx: int, img_b64: str) -> str:
+    def page_fn(idx: int, img_b64: str, image_refs: list[str]) -> str:
+        p = base_prompt
+        if image_refs:
+            p = base_prompt + IMAGE_ASSET_INSTRUCTION + "\n".join(image_refs) + "\n"
         payload = {
             "model": model,
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": p},
                     {"type": "image_url",
                      "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
                 ],
@@ -958,10 +981,13 @@ def convert_anthropic(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
-    prompt = _resolve_prompt(opts)
+    base_prompt = _resolve_prompt(opts)
     streaming = opts.stream_cb is not None
 
-    def page_fn(idx: int, img_b64: str) -> str:
+    def page_fn(idx: int, img_b64: str, image_refs: list[str]) -> str:
+        p = base_prompt
+        if image_refs:
+            p = base_prompt + IMAGE_ASSET_INSTRUCTION + "\n".join(image_refs) + "\n"
         payload = {
             "model": model, "max_tokens": 4096,
             "messages": [{
@@ -969,7 +995,7 @@ def convert_anthropic(
                 "content": [
                     {"type": "image",
                      "source": {"type": "base64", "media_type": "image/png", "data": img_b64}},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": p},
                 ],
             }],
         }
@@ -1142,20 +1168,23 @@ def convert_bedrock(
     progress: ProgressCb | None = None,
     session_token: str = "",
 ) -> str:
-    prompt = _resolve_prompt(opts)
+    base_prompt = _resolve_prompt(opts)
     if not (region and access_key and secret_key and model):
         raise ConversionError(
             "AWS Bedrock needs Region, Access key, Secret key and a Model id. "
             "Fill them in under Settings → AWS Bedrock."
         )
 
-    def page_fn(idx: int, img_b64: str) -> str:
+    def page_fn(idx: int, img_b64: str, image_refs: list[str]) -> str:
+        p = base_prompt
+        if image_refs:
+            p = base_prompt + IMAGE_ASSET_INSTRUCTION + "\n".join(image_refs) + "\n"
         payload = {
             "messages": [{
                 "role": "user",
                 "content": [
                     {"image": {"format": "png", "source": {"bytes": img_b64}}},
-                    {"text": prompt},
+                    {"text": p},
                 ],
             }],
             "inferenceConfig": {"maxTokens": 4096},
