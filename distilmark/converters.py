@@ -701,6 +701,19 @@ def _run_llm(
         images[i] = _render_page_png_b64(doc[i])
     doc.close()
 
+    # For LLM/vision engines (Ollama, OpenAI, Bedrock, etc.) we still want a folder
+    # with images when include_images is on. We save the exact page renders that
+    # were sent to the vision model. This makes the output .md contain working
+    # image links (like native/pdfplumber modes) and creates the images/ folder
+    # the user expects.
+    if opts.include_images and opts.image_dir is not None:
+        opts.image_dir.mkdir(parents=True, exist_ok=True)
+        for page_idx in indices:
+            b64 = images[page_idx]
+            data = base64.b64decode(b64)
+            fname = f"page{page_idx + 1:03d}.png"
+            (opts.image_dir / fname).write_bytes(data)
+
     n_total = len(indices)
     results: dict[int, str] = {}
     concurrency = max(1, opts.llm_concurrency)
@@ -729,6 +742,23 @@ def _run_llm(
                 raise
 
     pages = [results[i] for i in indices]
+
+    # Guarantee that each page section in the final markdown has a reference to
+    # its visual (the full page render we sent to the LLM). This ensures images
+    # appear in the .md and in the Preview even if the LLM transcription itself
+    # does not emit image links.
+    if opts.include_images and opts.image_dir is not None:
+        wrapped_pages = []
+        for n, i in enumerate(indices):
+            text = pages[n]
+            fname = f"page{i + 1:03d}.png"
+            if opts.image_dir_name:
+                ref = f"./{opts.image_dir_name}/{fname}"
+            else:
+                ref = fname
+            wrapped_pages.append(f"![Page {i + 1}]({ref})\n\n{text}")
+        pages = wrapped_pages
+
     pages = postprocess(pages, opts)
     return _assemble(pages, opts)
 
