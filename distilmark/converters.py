@@ -1021,8 +1021,17 @@ def _bedrock_invoke(
 ) -> dict:
     """POST a Converse request to bedrock-runtime, SigV4-signed. Returns parsed JSON."""
     host = f"bedrock-runtime.{region}.amazonaws.com"
-    canonical_uri = "/model/" + urllib.parse.quote(model, safe="") + "/converse"
-    endpoint = f"https://{host}{canonical_uri}"
+    # The model id can contain characters that must be percent-encoded in the
+    # URL path (notably ':' in "...-v1:0" and '.' is left as-is). The path put
+    # on the wire is single-encoded; SigV4 canonicalisation for non-S3 services
+    # requires the path to be URI-encoded *again* (double-encoded), so e.g.
+    # ':' -> '%3A' on the wire but '%253A' in the string-to-sign. Without the
+    # second pass the computed signature never matches AWS's and you get
+    # HTTP 403 "signature ... does not match".
+    encoded_model = urllib.parse.quote(model, safe="")
+    request_uri = "/model/" + encoded_model + "/converse"
+    canonical_uri = "/model/" + urllib.parse.quote(encoded_model, safe="") + "/converse"
+    endpoint = f"https://{host}{request_uri}"
 
     now = _dt.datetime.now(_dt.timezone.utc)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
