@@ -1050,7 +1050,7 @@ def _bedrock_invoke(
 
     canonical_request = (
         "POST\n" + canonical_uri + "\n" + "\n"
-        + canonical_headers + "\n" + signed_headers + "\n" + payload_hash
+        + canonical_headers + signed_headers + "\n" + payload_hash
     )
 
     algorithm = "AWS4-HMAC-SHA256"
