@@ -144,7 +144,11 @@ Pick whichever vibe matches you:
   <img src="./screenshots/courses-dark.png" width="820" alt="Distilmark — Courses page with chapters and a library view" />
 </p>
 
-**Preview** (live side-by-side) — original PDF page next to the rendered + editable Markdown. Works great with extracted images (relative paths are resolved so figures appear correctly). Use a PDF containing images (e.g. files under `test/`) to see image extraction + preview in action.
+**Preview** (live side-by-side) — original PDF page next to the rendered + editable Markdown. 
+
+The preview pane now has improved guidance: when no file is loaded it tells you to convert a PDF containing images (use files under `test/` or any PDF with figures) so you can see the left-side PDF render + right-side Markdown with properly resolved extracted images (`./..._images/...png`).
+
+This makes the image extraction + preview demo much clearer.
 
 **Engines** — manage Ollama and configure every offline & hosted back-end:
 

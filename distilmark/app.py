@@ -2291,8 +2291,13 @@ class PreviewPage(QWidget):
         self.pdf_scroll = QScrollArea()
         self.pdf_scroll.setWidgetResizable(False)
         self.pdf_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.pdf_label = QLabel("No PDF loaded yet.")
+        self.pdf_label = QLabel(
+            "No PDF loaded yet.\n\n"
+            "Convert a PDF (preferably one containing images, e.g. from the test/ folder or your own docs)\n"
+            "to see the original page here beside the rendered Markdown with extracted images."
+        )
         self.pdf_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pdf_label.setWordWrap(True)
         self.pdf_scroll.setWidget(self.pdf_label)
         lv.addWidget(self.pdf_scroll, 1)
         splitter.addWidget(left)
