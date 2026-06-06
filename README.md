@@ -144,11 +144,7 @@ Pick whichever vibe matches you:
   <img src="./screenshots/courses-dark.png" width="820" alt="Distilmark — Courses page with chapters and a library view" />
 </p>
 
-**Preview** — the source PDF beside the rendered Markdown (Diff view in Compare mode):
-
-<p align="center">
-  <img src="./screenshots/preview-dark.png" width="820" alt="Distilmark — Preview page with side-by-side PDF and Markdown" />
-</p>
+**Preview** (live side-by-side) — original PDF page next to the rendered + editable Markdown. Works great with extracted images (relative paths are resolved so figures appear correctly). Use a PDF containing images (e.g. files under `test/`) to see image extraction + preview in action.
 
 **Engines** — manage Ollama and configure every offline & hosted back-end:
 
@@ -225,16 +221,31 @@ them all to the queue. Files are then converted one by one with a
 
 ## 🛠️ Build your own `.exe`
 
+**Recommended (lean + fast binary):**
+
+Use a clean virtual environment with *only* the real dependencies, then build with the project spec (it excludes heavy ML packages like torch/sklearn that bloat the exe to 400-500 MB and slow startup).
+
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt pyinstaller pillow
+# Now build using the spec (excludes unnecessary huge packages)
+pyinstaller --clean -y Distilmark.spec
+# → dist\Distilmark.exe  (~110 MB typical, much faster to start)
+```
+
+If you prefer the manual command, at least add excludes:
+
+```powershell
 pyinstaller --noconfirm --onefile --windowed --name Distilmark `
-  --collect-all pymupdf --collect-all pymupdf4llm `
+  --collect-all pymupdf --collect-all pymupdf4llm --collect-all pdfplumber `
+  --exclude-module torch --exclude-module tensorflow --exclude-module sklearn `
+  --exclude-module pandas --exclude-module matplotlib --exclude-module scipy `
   --icon icon.ico distilmark_launcher.py
-# → dist\Distilmark.exe 🎉
 ```
 
 Or just push a `v*` tag — the [release workflow](./.github/workflows/release.yml)
-builds and uploads `Distilmark.exe` to GitHub Releases automatically.
+builds and uploads `Distilmark.exe` to GitHub Releases automatically (using the lean spec).
 
 ---
 

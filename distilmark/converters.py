@@ -672,7 +672,14 @@ def convert_pdfplumber(
 # Page rendering helper for vision-capable LLMs
 # ---------------------------------------------------------------------------
 
-def _render_page_png_b64(page: pymupdf.Page, dpi: int = 150) -> str:
+def _render_page_png_b64(page: pymupdf.Page, dpi: int = 100) -> str:
+    """Render page to PNG bytes for vision LLM input.
+
+    Default lowered to 100 DPI (was 150). Sufficient for VLM to read text,
+    understand layout, and locate figures. Smaller images = lower token cost,
+    smaller RAM usage for big documents (e.g. 100+ pages), and less chance of
+    hitting provider per-request size / token limits on Bedrock / OpenAI etc.
+    """
     pix = page.get_pixmap(dpi=dpi)
     data = pix.tobytes("png")
     return base64.b64encode(data).decode("ascii")
@@ -1111,7 +1118,7 @@ def convert_anthropic(
         if prefix.strip():
             p = prefix + base_prompt
         payload = {
-            "model": model, "max_tokens": 4096,
+            "model": model, "max_tokens": 8192,
             "messages": [{
                 "role": "user",
                 "content": [
@@ -1314,7 +1321,13 @@ def convert_bedrock(
                     {"text": p},
                 ],
             }],
-            "inferenceConfig": {"maxTokens": 4096},
+            # Raised from 4096. Dense pages (especially with tables or long lists)
+            # can need more output tokens. For very large documents (>80-100 pages)
+            # with hosted vision models you may still hit provider quotas, rate limits,
+            # or per-call input token budgets (the image itself costs ~1k vision tokens).
+            # Recommendation: use lower concurrency (1), or prefer native/pdfplumber
+            # for huge docs.
+            "inferenceConfig": {"maxTokens": 8192},
         }
         body = json.dumps(payload).encode("utf-8")
         data = _bedrock_invoke(
