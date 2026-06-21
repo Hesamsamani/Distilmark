@@ -12,8 +12,11 @@ Shared features handled here (engine-agnostic):
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
+import os
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -111,6 +114,84 @@ class ConvertOptions:
 def _check_cancel(opts: ConvertOptions) -> None:
     if opts.cancel_check and opts.cancel_check():
         raise CancelledError("Conversion cancelled by user.")
+
+
+_LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _is_localhost_host(hostname: str) -> bool:
+    return hostname.lower() in _LOCALHOST_HOSTS
+
+
+def _resolve_host_addresses(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Resolve a hostname to IP addresses for SSRF checks."""
+    if _is_localhost_host(hostname):
+        return [ipaddress.ip_address("127.0.0.1")]
+    try:
+        return [ipaddress.ip_address(hostname)]
+    except ValueError:
+        pass
+    addrs: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    try:
+        for info in socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM):
+            try:
+                addrs.append(ipaddress.ip_address(info[4][0]))
+            except ValueError:
+                continue
+    except OSError:
+        return []
+    return addrs
+
+
+def _is_blocked_address(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    *,
+    allow_localhost: bool,
+) -> bool:
+    if allow_localhost and addr.is_loopback:
+        return False
+    return (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+    )
+
+
+def _validate_outbound_url(url: str, *, allow_http_localhost: bool = False) -> str:
+    """Validate an outbound LLM endpoint URL before making requests.
+
+    Remote endpoints must use HTTPS. ``http://`` is allowed only for localhost /
+    127.0.0.1 when ``allow_http_localhost`` is True (Ollama). Private and
+    reserved addresses are blocked unless ``DISTILMARK_ALLOW_PRIVATE_URLS=1``.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme or not parsed.hostname:
+        raise ConversionError(f"Invalid LLM endpoint URL: {url!r}")
+
+    host = parsed.hostname
+    is_local = _is_localhost_host(host)
+    if is_local and allow_http_localhost:
+        if parsed.scheme not in ("http", "https"):
+            raise ConversionError(
+                f"Local Ollama endpoints must use http or https (got {parsed.scheme!r})."
+            )
+    elif parsed.scheme != "https":
+        raise ConversionError(
+            f"Remote LLM endpoints must use HTTPS (got {parsed.scheme!r} for {host})."
+        )
+
+    if os.environ.get("DISTILMARK_ALLOW_PRIVATE_URLS") == "1":
+        return url.rstrip("/")
+
+    for addr in _resolve_host_addresses(host):
+        if _is_blocked_address(addr, allow_localhost=is_local and allow_http_localhost):
+            raise ConversionError(
+                f"Blocked request to private or reserved address {addr}. "
+                "Set DISTILMARK_ALLOW_PRIVATE_URLS=1 to allow private-network endpoints."
+            )
+    return url.rstrip("/")
 
 
 def _page_indices(total: int, page_range: tuple[int, int] | None) -> list[int]:
@@ -905,6 +986,7 @@ def convert_ollama(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
+    url = _validate_outbound_url(url, allow_http_localhost=True)
     base_prompt = _resolve_prompt(opts)
     streaming = opts.stream_cb is not None
 
@@ -1023,6 +1105,7 @@ def convert_openai_compatible(
     opts: ConvertOptions,
     progress: ProgressCb | None = None,
 ) -> str:
+    base_url = _validate_outbound_url(base_url, allow_http_localhost=False)
     base_prompt = _resolve_prompt(opts)
     streaming = opts.stream_cb is not None
 
@@ -1404,6 +1487,7 @@ def count_pages(pdf_path: Path) -> int:
 
 def list_ollama_models(url: str) -> list[str]:
     try:
+        url = _validate_outbound_url(url, allow_http_localhost=True)
         req = urllib.request.Request(url.rstrip("/") + "/api/tags")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -1421,6 +1505,7 @@ def pull_ollama_model(
     progress_cb: PullProgressCb,
 ) -> None:
     """Stream-pull an Ollama model. Calls progress_cb for each progress line."""
+    url = _validate_outbound_url(url, allow_http_localhost=True)
     payload = {"name": model, "stream": True}
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(

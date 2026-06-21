@@ -2,7 +2,10 @@
 """Distilmark main application — modern PyQt6 GUI."""
 from __future__ import annotations
 
+import json
+import os
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
@@ -2571,6 +2574,24 @@ def _safe_dirname(name: str) -> str:
     return s[:80] or "untitled"
 
 
+def _write_coursemark_config(secrets: dict[str, str]) -> Path:
+    """Write CourseMark credentials to a short-lived, owner-only temp file."""
+    fd, raw_path = tempfile.mkstemp(suffix=".json", prefix="coursemark-config-")
+    path = Path(raw_path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(secrets, fh)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+    except Exception:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return path
+
+
 class _CourseMarkRunDialog(QDialog):
     """Runs the CourseMark CLI as a subprocess and streams its output here.
 
@@ -2578,9 +2599,17 @@ class _CourseMarkRunDialog(QDialog):
     installed `coursemark` rather than importing it, so the private CourseMark
     repo never has to be a hard dependency of the public Distilmark."""
 
-    def __init__(self, cmd: list[str], env_overrides: dict, out_dir: Path, parent=None):
+    def __init__(
+        self,
+        cmd: list[str],
+        env_overrides: dict,
+        out_dir: Path,
+        config_path: Path | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self._out_dir = out_dir
+        self._config_path = config_path
         self.setWindowTitle("CourseMark — generating study material")
         self.resize(720, 460)
         v = QVBoxLayout(self)
@@ -2608,10 +2637,26 @@ class _CourseMarkRunDialog(QDialog):
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self._read)
         self.proc.finished.connect(self._finished)
-        self.proc.errorOccurred.connect(
-            lambda _e: self._append(f"\n✗ Could not start CourseMark: {self.proc.errorString()}"))
+        self.proc.errorOccurred.connect(self._on_error)
         self._append("$ " + " ".join(cmd) + "\n")
         self.proc.start(cmd[0], cmd[1:])
+
+    def _cleanup_config(self) -> None:
+        if self._config_path is None:
+            return
+        try:
+            self._config_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self._config_path = None
+
+    def _on_error(self, _e):
+        self._append(f"\n✗ Could not start CourseMark: {self.proc.errorString()}")
+        self._cleanup_config()
+
+    def reject(self):
+        self._cleanup_config()
+        super().reject()
 
     def _read(self):
         data = bytes(self.proc.readAllStandardOutput()).decode("utf-8", "replace")
@@ -2626,6 +2671,7 @@ class _CourseMarkRunDialog(QDialog):
             self.open_btn.setEnabled(True)
         else:
             self._append(f"\n✗ CourseMark exited with code {code}. See the log above.")
+        self._cleanup_config()
 
 
 class CoursesPage(QWidget):
@@ -2924,20 +2970,29 @@ class CoursesPage(QWidget):
         self._refresh_tree()
 
     # ---- CourseMark hand-off ----
-    def _coursemark_engine_args(self) -> tuple[str, str, dict]:
+    def _coursemark_engine_args(self) -> tuple[str, str]:
         """Map Distilmark's saved engine settings to CourseMark CLI args.
-        Prefers a hosted key (fast) when present, else falls back to Ollama.
-        Returns (engine, model, env_overrides)."""
+        Prefers a hosted key (fast) when present, else falls back to Ollama."""
         cfg = self.cfg
-        env: dict[str, str] = {}
         if cfg.get("openai_api_key"):
-            env["OPENAI_API_KEY"] = cfg["openai_api_key"]
-            return "openai", cfg.get("openai_model", "gpt-4o-mini"), env
+            return "openai", cfg.get("openai_model", "gpt-4o-mini")
         if cfg.get("anthropic_api_key"):
-            env["ANTHROPIC_API_KEY"] = cfg["anthropic_api_key"]
-            return "anthropic", cfg.get("anthropic_model", "claude-haiku-4-5-20251001"), env
-        env["OLLAMA_URL"] = cfg.get("ollama_url", "http://localhost:11434")
-        return "ollama", cfg.get("ollama_model", "llama3.1"), env
+            return "anthropic", cfg.get("anthropic_model", "claude-haiku-4-5-20251001")
+        return "ollama", cfg.get("ollama_model", "llama3.1")
+
+    def _coursemark_runtime_env(self) -> tuple[dict[str, str], Path]:
+        """Build a short-lived CourseMark config file instead of exporting API keys
+        into the subprocess environment."""
+        cfg = self.cfg
+        secrets: dict[str, str] = {}
+        if cfg.get("openai_api_key"):
+            secrets["openai_api_key"] = cfg["openai_api_key"]
+        elif cfg.get("anthropic_api_key"):
+            secrets["anthropic_api_key"] = cfg["anthropic_api_key"]
+        else:
+            secrets["ollama_url"] = cfg.get("ollama_url", "http://localhost:11434")
+        config_path = _write_coursemark_config(secrets)
+        return {"COURSEMARK_CONFIG_PATH": str(config_path)}, config_path
 
     @staticmethod
     def _find_coursemark() -> list[str] | None:
@@ -2990,7 +3045,7 @@ class CoursesPage(QWidget):
                 "Run “Convert pending →” first, then send to CourseMark.")
             return
 
-        engine, model, env = self._coursemark_engine_args()
+        engine, model = self._coursemark_engine_args()
         out_dir = export_root / "study"
         runner = self._find_coursemark()
 
@@ -3025,9 +3080,10 @@ class CoursesPage(QWidget):
             return
 
         # 2) Run CourseMark as a subprocess, streaming its log into a dialog.
+        env, config_path = self._coursemark_runtime_env()
         cmd = runner + ["run", str(export_root), "--engine", engine,
                         "--model", model, "--context", p["name"], "--out", str(out_dir)]
-        dlg = _CourseMarkRunDialog(cmd, env, out_dir, self)
+        dlg = _CourseMarkRunDialog(cmd, env, out_dir, config_path, self)
         dlg.exec()
 
     # ---- tree rendering ----
