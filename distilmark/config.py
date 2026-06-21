@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Persistent settings and history for Distilmark."""
 import json
+import os
 import shutil
 import datetime
 from pathlib import Path
@@ -12,6 +13,25 @@ CONFIG_FILE = APP_HOME / "config.json"
 HISTORY_FILE = APP_HOME / "history.json"
 
 MAX_HISTORY = 500
+
+
+def _ensure_app_home() -> None:
+    """Create APP_HOME with owner-only permissions on Unix."""
+    APP_HOME.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        try:
+            os.chmod(APP_HOME, 0o700)
+        except OSError:
+            pass
+
+
+def _secure_file(path: Path) -> None:
+    """Restrict a written config/history file to owner read/write on Unix."""
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 def _migrate_legacy() -> None:
@@ -100,7 +120,7 @@ DEFAULTS: dict[str, Any] = {
 
 def load() -> dict[str, Any]:
     _migrate_legacy()
-    APP_HOME.mkdir(parents=True, exist_ok=True)
+    _ensure_app_home()
     if not CONFIG_FILE.exists():
         save(DEFAULTS)
         return dict(DEFAULTS)
@@ -115,9 +135,10 @@ def load() -> dict[str, Any]:
 
 
 def save(cfg: dict[str, Any]) -> None:
-    APP_HOME.mkdir(parents=True, exist_ok=True)
+    _ensure_app_home()
     with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, indent=2, ensure_ascii=False)
+    _secure_file(CONFIG_FILE)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +156,7 @@ def load_history() -> list[dict]:
 
 
 def append_history(entry: dict) -> None:
-    APP_HOME.mkdir(parents=True, exist_ok=True)
+    _ensure_app_home()
     history = load_history()
     entry.setdefault("ts", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     history.append(entry)
@@ -143,6 +164,7 @@ def append_history(entry: dict) -> None:
         history = history[-MAX_HISTORY:]
     with open(HISTORY_FILE, "w", encoding="utf-8") as fh:
         json.dump(history, fh, indent=2, ensure_ascii=False)
+    _secure_file(HISTORY_FILE)
 
 
 def clear_history() -> None:
