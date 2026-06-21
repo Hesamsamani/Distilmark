@@ -5,13 +5,11 @@
 ### 📄 → 📝 The friendliest way to turn PDFs into beautiful Markdown
 
 <p>
-  <img alt="lint" src="https://github.com/Hesamsamani/distilmark/actions/workflows/pylint.yml/badge.svg" />
-  <img alt="release" src="https://github.com/Hesamsamani/distilmark/actions/workflows/release.yml/badge.svg" />
-  <img alt="python" src="https://img.shields.io/badge/python-3.10+-blue?logo=python&logoColor=white" />
-  <img alt="qt" src="https://img.shields.io/badge/PyQt6-41CD52?logo=qt&logoColor=white" />
-  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" />
-  <img alt="license" src="https://img.shields.io/badge/license-MIT-green" />
-  <img alt="version" src="https://img.shields.io/badge/version-v1.5.0-BD93F9" />
+  <a href="https://github.com/Hesamsamani/Distilmark/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/Hesamsamani/Distilmark?style=for-the-badge&label=%E2%AC%87%EF%B8%8F%20Download" /></a>
+  <img alt="python" src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" />
+  <img alt="qt" src="https://img.shields.io/badge/PyQt6-41CD52?style=for-the-badge&logo=qt&logoColor=white" />
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge" />
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" />
 </p>
 
 <p>
@@ -30,6 +28,46 @@ model, or any hosted LLM — drop your files in, and grab your `.md`s. That's it
 
 > 💡 *Originally a fork of a PDF editor (`pyPDFeditor-GUI`), now reborn as a focused
 > PDF → Markdown converter. The legacy editor still ships in the same repo.*
+
+---
+
+## ⚙️ How it works
+
+```mermaid
+flowchart LR
+  subgraph input["Input"]
+    PDF["PDF / DOCX / EPUB …"]
+    Q["Queue + page range"]
+  end
+
+  subgraph pick["Engine pick"]
+    E["Native · pdfplumber · Ollama\nOpenAI · Anthropic · Bedrock"]
+  end
+
+  subgraph convert["Conversion"]
+    C["converters.py"]
+    T["QThread worker"]
+  end
+
+  subgraph output["Output"]
+    MD["Markdown .md"]
+    DOC["DOCX / HTML export"]
+    IMG["Extracted images"]
+  end
+
+  PDF --> Q
+  Q --> E
+  E --> C
+  C --> T
+  T --> MD
+  MD --> DOC
+  T --> IMG
+```
+
+1. **Drop files** — drag PDFs or folders into the queue; optionally set a page range or per-file engine override.
+2. **Pick an engine** — choose offline PyMuPDF, local Ollama vision, or a hosted LLM (OpenAI, Anthropic, Bedrock, OpenAI-compatible).
+3. **Convert in background** — a threaded worker runs `converters.py` so the PyQt6 UI stays responsive with live per-page progress.
+4. **Preview & export** — edit Markdown side-by-side with the source PDF, then export HTML, DOCX, or combined batch output.
 
 ---
 
@@ -260,6 +298,58 @@ builds and uploads `Distilmark.exe` to GitHub Releases automatically (using the 
 | 🪟 Windows | `C:\Users\YOU\.distilmark\config.json` |
 | 🍎 macOS | `~/.distilmark/config.json` |
 | 🐧 Linux | `~/.distilmark/config.json` |
+
+---
+
+## 🏗 Architecture
+
+```mermaid
+flowchart LR
+  subgraph gui["PyQt6 GUI · app.py"]
+    CV["Convert tab"]
+    PR["Preview / Courses"]
+    EN["Engines settings"]
+  end
+
+  subgraph workers["Background"]
+    WT["QThread worker"]
+    OM["ollama_manager.py"]
+  end
+
+  subgraph engines["converters.py"]
+    NA["PyMuPDF native"]
+    PL["pdfplumber"]
+    OL["Ollama vision"]
+    OAI["OpenAI"]
+    ANT["Anthropic"]
+    BR["AWS Bedrock"]
+  end
+
+  subgraph export["exporters.py"]
+    EX["HTML · DOCX · combine"]
+  end
+
+  subgraph persist["~/.distilmark"]
+    CF["config.json"]
+    HI["history.json"]
+  end
+
+  CV --> WT
+  EN --> OM
+  WT --> engines
+  WT --> PR
+  engines --> EX
+  gui --> CF
+  WT --> HI
+```
+
+| Layer | Tech |
+|-------|------|
+| GUI | PyQt6 — Convert, Preview, Courses, Engines, History tabs |
+| Workers | QThread conversion worker + Ollama model manager |
+| Engines | PyMuPDF, pdfplumber, Ollama, OpenAI, Anthropic, Bedrock |
+| Export | Pandoc / python-docx via `exporters.py` |
+| Settings | `~/.distilmark/config.json` + conversion history log |
 
 ---
 
