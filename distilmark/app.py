@@ -50,6 +50,7 @@ from PyQt6.QtWidgets import (
     QWizardPage,
     QRadioButton,
     QButtonGroup,
+    QStyle,
 )
 
 from . import config, converters, styles, ollama_manager, exporters, projects
@@ -276,6 +277,10 @@ class ScanWorker(QThread):
 
 from PyQt6.QtCore import QRectF  # noqa: E402
 from PyQt6.QtGui import QPen, QPainterPath  # noqa: E402
+
+
+def _std_icon(sp: QStyle.StandardPixmap) -> QIcon:
+    return QApplication.style().standardIcon(sp)
 
 
 def _icon_add(color: str = "#BD93F9") -> QIcon:
@@ -728,6 +733,7 @@ class ConvertPage(QWidget):
         self.folder_btn.clicked.connect(self.pick_folder)
 
         self.clear_btn = QPushButton("Clear")
+        self.clear_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_DialogCancelButton))
         self.clear_btn.setObjectName("Ghost")
         self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clear_btn.clicked.connect(self.clear_queue)
@@ -856,6 +862,7 @@ class ConvertPage(QWidget):
         )
         self.estimate_btn.clicked.connect(self._estimate_cost)
         self.cancel_conv_btn = QPushButton("Cancel")
+        self.cancel_conv_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_DialogCancelButton))
         self.cancel_conv_btn.setObjectName("Danger")
         self.cancel_conv_btn.setEnabled(False)
         self.cancel_conv_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -895,7 +902,8 @@ class ConvertPage(QWidget):
     def _build_quick_actions(self) -> QWidget:
         box = QGroupBox("Last result")
         row = QHBoxLayout(box)
-        self.open_folder_btn = QPushButton("📂 Open output folder")
+        self.open_folder_btn = QPushButton("Open output folder")
+        self.open_folder_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_DirOpenIcon))
         self.open_folder_btn.setObjectName("Ghost")
         self.open_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_folder_btn.clicked.connect(
@@ -1643,10 +1651,12 @@ class SettingsPage(QWidget):
         status_row = QHBoxLayout()
         self.service_label = QLabel("Checking…")
         self.service_label.setWordWrap(True)
-        self.start_service_btn = QPushButton("▶ Start Ollama")
+        self.start_service_btn = QPushButton("Start Ollama")
+        self.start_service_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_MediaPlay))
         self.start_service_btn.setVisible(False)
         self.start_service_btn.clicked.connect(self._start_service)
-        recheck_btn = QPushButton("↻ Re-check")
+        recheck_btn = QPushButton("Re-check")
+        recheck_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_BrowserReload))
         recheck_btn.clicked.connect(self._refresh_service_status)
         status_row.addWidget(self.service_label, 1)
         status_row.addWidget(self.start_service_btn)
@@ -1669,10 +1679,12 @@ class SettingsPage(QWidget):
         self.installed_combo = QComboBox()
         self.installed_combo.setEditable(False)
         self.installed_combo.currentTextChanged.connect(self._on_installed_selected)
-        scan_btn = QPushButton("🔍 Scan")
+        scan_btn = QPushButton("Scan")
+        scan_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_FileDialogContentsView))
         scan_btn.setToolTip("Scan filesystem for installed Ollama models (works even if Ollama is off)")
         scan_btn.clicked.connect(self._scan_filesystem)
-        update_all_btn = QPushButton("⟳ Update all")
+        update_all_btn = QPushButton("Update all")
+        update_all_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_BrowserReload))
         update_all_btn.setToolTip(
             "Re-download every installed model from registry.ollama.ai "
             "(inspired by tz-ollama-utils)."
@@ -1702,9 +1714,11 @@ class SettingsPage(QWidget):
         pull_row = QHBoxLayout()
         self.pull_input = QLineEdit()
         self.pull_input.setPlaceholderText("e.g. llama3.2-vision:11b  (downloads directly, no daemon needed)")
-        self.pull_btn = QPushButton("⬇ Download")
+        self.pull_btn = QPushButton("Download")
+        self.pull_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowDown))
         self.pull_btn.clicked.connect(self._pull_model)
         self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_DialogCancelButton))
         self.cancel_btn.setVisible(False)
         self.cancel_btn.clicked.connect(self._cancel_pull)
         pull_row.addWidget(self.pull_input, 1)
@@ -1918,7 +1932,7 @@ class SettingsPage(QWidget):
     def timerEvent(self, event):
         self.killTimer(event.timerId())
         self.start_service_btn.setEnabled(True)
-        self.start_service_btn.setText("▶ Start Ollama")
+        self.start_service_btn.setText("Start Ollama")
         self._refresh_service_status()
 
     # ----- Filesystem scan -----
@@ -2235,11 +2249,13 @@ class PreviewPage(QWidget):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         nav = QHBoxLayout()
-        self.prev_btn = QPushButton("◀ Prev")
+        self.prev_btn = QPushButton("Prev")
+        self.prev_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowLeft))
         self.prev_btn.setObjectName("Ghost")
         self.prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.prev_btn.clicked.connect(self._prev_page)
-        self.next_btn = QPushButton("Next ▶")
+        self.next_btn = QPushButton("Next")
+        self.next_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_ArrowRight))
         self.next_btn.setObjectName("Ghost")
         self.next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.next_btn.clicked.connect(self._next_page)
@@ -2271,7 +2287,8 @@ class PreviewPage(QWidget):
         self.zoom_reset_btn.setIconSize(QSize(20, 20))
         self.zoom_reset_btn.clicked.connect(lambda: self._set_zoom(1.0))
         # Live PDF↔MD sync toggle
-        self.sync_btn = QPushButton("🔗 Sync")
+        self.sync_btn = QPushButton("Sync")
+        self.sync_btn.setIcon(_std_icon(QStyle.StandardPixmap.SP_BrowserReload))
         self.sync_btn.setObjectName("Ghost")
         self.sync_btn.setCheckable(True)
         self.sync_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2534,7 +2551,7 @@ class PreviewPage(QWidget):
     # ---- sync ----
     def _on_sync_toggled(self, checked: bool):
         self._sync = checked
-        self.sync_btn.setText("🔗 Sync on" if checked else "🔗 Sync")
+        self.sync_btn.setText("Sync on" if checked else "Sync")
         if checked:
             self._sync_md_to_page()
 
